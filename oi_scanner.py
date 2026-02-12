@@ -89,8 +89,14 @@ def format_number(n):
     return f"{n:.2f}"
 
 def send_discord_alert(alerts):
-    if not DISCORD_WEBHOOK or not alerts:
+    if not DISCORD_WEBHOOK:
+        print("WARNING: No DISCORD_WEBHOOK_URL set!")
         return
+    if not alerts:
+        print("No alerts to send")
+        return
+    
+    print(f"Sending {len(alerts)} alerts to Discord...")
     
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M")
@@ -205,6 +211,17 @@ def main():
         send_discord_alert(alerts)
     else:
         print("No significant OI movements detected")
+        if DISCORD_WEBHOOK:
+            tw_tz = timezone(timedelta(hours=8))
+            now = datetime.now(tw_tz).strftime("%H:%M")
+            payload = {
+                "content": f"✅ **OI 掃描完成** | {now}\n掃描 {len(symbols)} 個幣種，目前無顯著異動"
+            }
+            try:
+                r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+                print(f"Status sent: {r.status_code}")
+            except Exception as e:
+                print(f"Status error: {e}")
 
 if __name__ == "__main__":
     main()
