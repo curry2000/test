@@ -1,0 +1,33 @@
+name: Crypto Monitor
+
+on:
+  schedule:
+    # 每 15 分鐘執行一次
+    - cron: '*/15 * * * *'
+  workflow_dispatch:  # 允許手動觸發
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Run Price Monitor
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python monitor_webhook.py
+      
+      - name: Run Order Block Analysis
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python order_block.py
