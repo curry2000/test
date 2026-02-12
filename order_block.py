@@ -67,6 +67,7 @@ class OrderBlock:
 # ========== API 函數 ==========
 def get_klines(symbol: str, interval: str, limit: int = 200) -> List[Dict]:
     """取得 K 線數據"""
+    # 先試 Binance
     try:
         r = requests.get(
             "https://fapi.binance.com/fapi/v1/klines",
@@ -74,32 +75,82 @@ def get_klines(symbol: str, interval: str, limit: int = 200) -> List[Dict]:
             timeout=15
         )
         data = r.json()
-        klines = []
-        for k in data:
-            klines.append({
-                "time": datetime.fromtimestamp(int(k[0])/1000).strftime("%Y-%m-%d %H:%M"),
-                "open": float(k[1]),
-                "high": float(k[2]),
-                "low": float(k[3]),
-                "close": float(k[4]),
-                "volume": float(k[5])
-            })
-        return klines
+        if isinstance(data, list) and len(data) > 0:
+            klines = []
+            for k in data:
+                klines.append({
+                    "time": datetime.fromtimestamp(int(k[0])/1000).strftime("%Y-%m-%d %H:%M"),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5])
+                })
+            return klines
     except Exception as e:
-        print(f"Error getting klines: {e}")
-        return []
+        print(f"Binance error: {e}")
+    
+    # 備用：Bybit API
+    try:
+        interval_map = {"15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D"}
+        r = requests.get(
+            "https://api.bybit.com/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": f"{symbol}USDT",
+                "interval": interval_map.get(interval, "15"),
+                "limit": limit
+            },
+            timeout=15
+        )
+        data = r.json()
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            klines = []
+            for k in reversed(data["result"]["list"]):
+                klines.append({
+                    "time": datetime.fromtimestamp(int(k[0])/1000).strftime("%Y-%m-%d %H:%M"),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5])
+                })
+            return klines
+    except Exception as e:
+        print(f"Bybit error: {e}")
+    
+    return []
 
 def get_current_price(symbol: str) -> float:
     """取得當前價格"""
+    # 先試 Binance
     try:
         r = requests.get(
             "https://fapi.binance.com/fapi/v1/ticker/price",
             params={"symbol": f"{symbol}USDT"},
             timeout=10
         )
-        return float(r.json()["price"])
+        data = r.json()
+        if "price" in data:
+            return float(data["price"])
     except:
-        return 0
+        pass
+    
+    # 備用：CoinGecko
+    try:
+        coin_id = "bitcoin" if symbol == "BTC" else "ethereum" if symbol == "ETH" else symbol.lower()
+        r = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": coin_id, "vs_currencies": "usd"},
+            timeout=10
+        )
+        data = r.json()
+        if coin_id in data:
+            return float(data[coin_id]["usd"])
+    except:
+        pass
+    
+    return 0
 
 # ========== 核心邏輯 ==========
 def find_swing_highs(klines: List[Dict], length: int) -> List[int]:

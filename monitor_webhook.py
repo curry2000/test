@@ -34,6 +34,7 @@ OI_CHANGE_THRESHOLD = 0.015      # 1.5% OI 變動
 PRICE_CHANGE_THRESHOLD = 0.01    # 1% 價格波動
 
 def get_binance_price(symbol):
+    # 先試 Binance
     try:
         r = requests.get(
             "https://fapi.binance.com/fapi/v1/ticker/24hr",
@@ -41,12 +42,32 @@ def get_binance_price(symbol):
             timeout=10
         )
         data = r.json()
-        return {
-            "price": float(data["lastPrice"]),
-            "change_24h": float(data["priceChangePercent"]) / 100
-        }
+        if "lastPrice" in data:
+            return {
+                "price": float(data["lastPrice"]),
+                "change_24h": float(data["priceChangePercent"]) / 100
+            }
     except:
-        return None
+        pass
+    
+    # 備用：CoinGecko API
+    try:
+        coin_id = "bitcoin" if symbol == "BTC" else "ethereum" if symbol == "ETH" else symbol.lower()
+        r = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": coin_id, "vs_currencies": "usd", "include_24hr_change": "true"},
+            timeout=10
+        )
+        data = r.json()
+        if coin_id in data:
+            return {
+                "price": float(data[coin_id]["usd"]),
+                "change_24h": float(data[coin_id].get("usd_24h_change", 0)) / 100
+            }
+    except:
+        pass
+    
+    return None
 
 def get_binance_oi(symbol):
     try:
