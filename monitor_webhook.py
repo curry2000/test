@@ -32,6 +32,9 @@ ALERTS = {
 
 OI_CHANGE_THRESHOLD = 0.015      # 1.5% OI 變動
 PRICE_CHANGE_THRESHOLD = 0.01    # 1% 價格波動
+RSI_OVERSOLD = 30                # RSI 超賣
+RSI_OVERBOUGHT = 70              # RSI 超買
+RSI_PERIOD = 14                  # RSI 週期
 
 def get_binance_price(symbol):
     # 1. Bybit API
@@ -123,6 +126,77 @@ def get_binance_oi(symbol):
     
     return None
 
+def get_klines_for_rsi(symbol, interval="1h", limit=50):
+    """取得 K 線數據用於計算 RSI"""
+    # 1. Bybit
+    try:
+        interval_map = {"15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D"}
+        r = requests.get(
+            "https://api.bybit.com/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": f"{symbol}USDT",
+                "interval": interval_map.get(interval, "60"),
+                "limit": limit
+            },
+            timeout=15
+        )
+        data = r.json()
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            closes = [float(k[4]) for k in reversed(data["result"]["list"])]
+            return closes
+    except:
+        pass
+    
+    # 2. OKX
+    try:
+        interval_map = {"15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D"}
+        r = requests.get(
+            "https://www.okx.com/api/v5/market/candles",
+            params={
+                "instId": f"{symbol}-USDT-SWAP",
+                "bar": interval_map.get(interval, "1H"),
+                "limit": str(limit)
+            },
+            timeout=15
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            closes = [float(k[4]) for k in reversed(data["data"])]
+            return closes
+    except:
+        pass
+    
+    return []
+
+def calculate_rsi(closes, period=14):
+    """計算 RSI"""
+    if len(closes) < period + 1:
+        return None
+    
+    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    
+    if avg_loss == 0:
+        return 100
+    rs = avg_gain / avg_loss
+    return round(100 - (100 / (1 + rs)), 2)
+
+def get_rsi(symbol, interval="1h"):
+    """取得 RSI 值"""
+    closes = get_klines_for_rsi(symbol, interval, 50)
+    if closes:
+        return calculate_rsi(closes, RSI_PERIOD)
+    return None
+
 def load_state():
     if STATE_FILE.exists():
         with open(STATE_FILE, "r") as f:
@@ -191,6 +265,18 @@ def run_monitor():
                 direction = "📈 增加" if oi_change > 0 else "📉 減少"
                 alerts.append(f"📊 {symbol} OI {direction} {abs(oi_change)*100:.1f}%")
         
+        # RSI 監控
+        for tf in ["1h", "4h"]:
+            rsi = get_rsi(symbol, tf)
+            if rsi:
+                key = f"{symbol}_rsi_{tf}_{int(rsi/10)*10}"  # 每10為一個區間
+                if rsi <= RSI_OVERSOLD and f"{symbol}_oversold_{tf}" not in triggered:
+                    alerts.append(f"🔴 {symbol} {tf} RSI 超賣！RSI={rsi} (<{RSI_OVERSOLD})")
+                    triggered.append(f"{symbol}_oversold_{tf}")
+                elif rsi >= RSI_OVERBOUGHT and f"{symbol}_overbought_{tf}" not in triggered:
+                    alerts.append(f"🟢 {symbol} {tf} RSI 超買！RSI={rsi} (>{RSI_OVERBOUGHT})")
+                    triggered.append(f"{symbol}_overbought_{tf}")
+        
         # 價格波動
         last_price = state.get("last_prices", {}).get(symbol)
         if last_price:
@@ -221,10 +307,28 @@ if __name__ == "__main__":
         import requests as req
         webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
         if webhook:
-            from datetime import datetime
             btc = get_binance_price("BTC")
             eth = get_binance_price("ETH")
             btc_price = btc['price'] if btc else 0
             eth_price = eth['price'] if eth else 0
-            msg = f"✅ **監控執行成功**\nBTC: ${btc_price:,.2f}\nETH: ${eth_price:,.2f}\n⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
+            btc_src = btc.get('source', '?') if btc else '?'
+            eth_src = eth.get('source', '?') if eth else '?'
+            
+            # 取得 RSI
+            btc_rsi_1h = get_rsi("BTC", "1h") or 0
+            btc_rsi_4h = get_rsi("BTC", "4h") or 0
+            eth_rsi_1h = get_rsi("ETH", "1h") or 0
+            eth_rsi_4h = get_rsi("ETH", "4h") or 0
+            
+            def rsi_emoji(rsi):
+                if rsi <= 30: return "🔴"
+                if rsi >= 70: return "🟢"
+                return "⚪"
+            
+            msg = f"✅ **監控執行成功** (via {btc_src})\n\n"
+            msg += f"**BTC** ${btc_price:,.2f}\n"
+            msg += f"  RSI 1H: {rsi_emoji(btc_rsi_1h)} {btc_rsi_1h} | 4H: {rsi_emoji(btc_rsi_4h)} {btc_rsi_4h}\n\n"
+            msg += f"**ETH** ${eth_price:,.2f}\n"
+            msg += f"  RSI 1H: {rsi_emoji(eth_rsi_1h)} {eth_rsi_1h} | 4H: {rsi_emoji(eth_rsi_4h)} {eth_rsi_4h}\n\n"
+            msg += f"⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
             req.post(webhook, json={"content": msg, "username": "🔔 監控系統"}, timeout=10)
