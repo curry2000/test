@@ -48,11 +48,18 @@ def calculate_rsi(klines, period=14):
     deltas = np.diff(closes)
     gains = np.where(deltas > 0, deltas, 0)
     losses = np.where(deltas < 0, -deltas, 0)
-    avg_gain = np.mean(gains[-period:])
-    avg_loss = np.mean(losses[-period:])
+    
+    avg_gain = np.mean(gains[:period])
+    avg_loss = np.mean(losses[:period])
+    
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    
     if avg_loss == 0:
         return 100
-    return 100 - (100 / (1 + avg_gain / avg_loss))
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 def rsi_emoji(rsi):
     if rsi <= 30: return "🔴"
