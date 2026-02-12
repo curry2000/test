@@ -139,19 +139,6 @@ def get_current_price(symbol: str) -> float:
     except:
         pass
     
-    try:
-        coin_id = "bitcoin" if symbol == "BTC" else "ethereum" if symbol == "ETH" else symbol.lower()
-        r = requests.get(
-            f"https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": coin_id, "vs_currencies": "usd"},
-            timeout=10
-        )
-        data = r.json()
-        if coin_id in data:
-            return float(data[coin_id]["usd"])
-    except:
-        pass
-    
     return 0
 
 def find_swing_highs(klines: List[Dict], length: int) -> List[int]:
@@ -315,11 +302,12 @@ def check_ob_signals(symbol: str, timeframe: str, current_price: float, order_bl
                     "type": "BULLISH_OB",
                     "symbol": symbol,
                     "timeframe": timeframe,
-                    "action": "📈",
-                    "entry_zone": f"${ob.body_low:,.0f}-${ob.body_high:,.0f}",
-                    "stop_loss": f"${ob.low * 0.995:,.0f}",
-                    "ob_strength": f"{100 - ob.mitigation_pct:.0f}%",
-                    "volume": ob.volume,
+                    "action": "考慮做多",
+                    "emoji": "📈",
+                    "entry_low": ob.body_low,
+                    "entry_high": ob.body_high,
+                    "stop_loss": ob.low * 0.995,
+                    "ob_strength": 100 - ob.mitigation_pct,
                     "formed": ob.formed_time
                 })
         else:
@@ -329,11 +317,12 @@ def check_ob_signals(symbol: str, timeframe: str, current_price: float, order_bl
                     "type": "BEARISH_OB",
                     "symbol": symbol,
                     "timeframe": timeframe,
-                    "action": "📉",
-                    "entry_zone": f"${ob.body_low:,.0f}-${ob.body_high:,.0f}",
-                    "stop_loss": f"${ob.high * 1.005:,.0f}",
-                    "ob_strength": f"{100 - ob.mitigation_pct:.0f}%",
-                    "volume": ob.volume,
+                    "action": "考慮做空",
+                    "emoji": "📉",
+                    "entry_low": ob.body_low,
+                    "entry_high": ob.body_high,
+                    "stop_loss": ob.high * 1.005,
+                    "ob_strength": 100 - ob.mitigation_pct,
                     "formed": ob.formed_time
                 })
     
@@ -357,68 +346,20 @@ def send_discord_alert(message: str):
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={
             "content": message,
-            "username": "📊 OB"
+            "username": "📊 OB 訂單塊"
         }, timeout=10)
     except Exception as e:
         print(f"Webhook error: {e}")
-
-def format_ob_report(all_obs: Dict, signals: List[Dict]) -> str:
-    lines = [
-        "=" * 50,
-        "📊 **OB Analysis**",
-        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        "=" * 50,
-    ]
-    
-    for symbol in SYMBOLS:
-        price = get_current_price(symbol)
-        lines.append(f"\n**{symbol}** ${price:,.2f}")
-        
-        for tf in TIMEFRAMES:
-            key = f"{symbol}_{tf}"
-            obs = all_obs.get(key, [])
-            
-            bullish = [ob for ob in obs if ob.ob_type == "bullish" and ob.is_valid]
-            bearish = [ob for ob in obs if ob.ob_type == "bearish" and ob.is_valid]
-            
-            lines.append(f"\n  {tf}:")
-            
-            if bullish:
-                lines.append(f"    🟢 S:")
-                for ob in bullish[:3]:
-                    strength = 100 - ob.mitigation_pct
-                    lines.append(f"       ${ob.body_low:,.0f}-${ob.body_high:,.0f} [{strength:.0f}%]")
-            
-            if bearish:
-                lines.append(f"    🔴 R:")
-                for ob in bearish[:3]:
-                    strength = 100 - ob.mitigation_pct
-                    lines.append(f"       ${ob.body_low:,.0f}-${ob.body_high:,.0f} [{strength:.0f}%]")
-    
-    if signals:
-        lines.append("\n" + "=" * 50)
-        lines.append("🔔 **Signal**")
-        for sig in signals:
-            lines.append(f"\n{sig['action']} {sig['symbol']} ({sig['timeframe']})")
-            lines.append(f"   {sig['entry_zone']}")
-            lines.append(f"   SL: {sig['stop_loss']}")
-            lines.append(f"   {sig['ob_strength']}")
-    
-    return "\n".join(lines)
 
 def run_ob_analysis():
     state = load_state()
     all_obs = {}
     all_signals = []
     
-    print("Analyzing...")
-    
     for symbol in SYMBOLS:
         current_price = get_current_price(symbol)
-        print(f"\n{symbol}: ${current_price:,.2f}")
         
         for tf in TIMEFRAMES:
-            print(f"  {tf}...")
             klines = get_klines(symbol, tf, 200)
             
             if not klines:
@@ -433,25 +374,28 @@ def run_ob_analysis():
             signals = check_ob_signals(symbol, tf, current_price, valid_obs)
             
             for sig in signals:
-                sig_key = f"{sig['symbol']}_{sig['timeframe']}_{sig['entry_zone']}"
+                sig_key = f"{sig['symbol']}_{sig['timeframe']}_{sig['entry_low']:.0f}"
                 if sig_key not in state["alerted_obs"]:
                     all_signals.append(sig)
                     state["alerted_obs"].append(sig_key)
-            
-            print(f"    {len(valid_obs)} OB")
-    
-    report = format_ob_report(all_obs, all_signals)
-    print(report)
     
     if all_signals:
-        alert_msg = "🔔 **OB Signal**\n\n"
+        lines = ["🔔 **OB 訂單塊信號**", ""]
+        
         for sig in all_signals:
-            alert_msg += f"**{sig['action']}** {sig['symbol']} ({sig['timeframe']})\n"
-            alert_msg += f"{sig['entry_zone']}\n"
-            alert_msg += f"SL: {sig['stop_loss']}\n"
-            alert_msg += f"{sig['ob_strength']}\n\n"
-        alert_msg += f"⏰ {datetime.now().strftime('%H:%M')}"
+            lines.append(f"{sig['action']} {sig['emoji']} {sig['symbol']} ({sig['timeframe']})")
+            lines.append(f"入場區: ${sig['entry_low']:,.0f} - ${sig['entry_high']:,.0f}")
+            lines.append(f"止損: ${sig['stop_loss']:,.0f}")
+            lines.append(f"OB強度: {sig['ob_strength']:.0f}%")
+            lines.append("")
+        
+        lines.append(f"⏰ {datetime.now().strftime('%H:%M')}")
+        
+        alert_msg = "\n".join(lines)
         send_discord_alert(alert_msg)
+        print(alert_msg)
+    else:
+        print("無新信號")
     
     save_state(state)
     
