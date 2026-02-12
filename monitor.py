@@ -1,10 +1,12 @@
 import requests
 import os
+import json
 from datetime import datetime, timezone, timedelta
 import numpy as np
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
+SIGNAL_LOG = "monitor_signals.json"
 
 CONFIDENCE_TABLE = {
     "rsi_high_bearish": 75,
@@ -14,6 +16,20 @@ CONFIDENCE_TABLE = {
     "rsi_low_bullish": 37,
     "normal_bullish": 35,
 }
+
+def load_json(filepath):
+    try:
+        with open(filepath, "r") as f:
+            return json.load(f)
+    except:
+        return []
+
+def save_json(filepath, data):
+    try:
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+    except:
+        pass
 
 def get_klines(symbol, interval, limit):
     base = symbol.replace("USDT", "")
@@ -121,6 +137,116 @@ def get_confidence(ob):
         else:
             return CONFIDENCE_TABLE["normal_bullish"]
 
+def detect_signals(analysis):
+    signals = []
+    price = analysis["price"]
+    rsi = analysis["rsi"]
+    symbol = analysis["symbol"].replace("USDT", "")
+    
+    for ob in analysis.get("bullish_obs", []):
+        if ob["distance"] < 3:
+            signals.append({
+                "symbol": symbol,
+                "signal": "LONG",
+                "trigger": "OB",
+                "entry_price": price,
+                "ob_zone": f"${ob['bottom']:,.0f}-${ob['top']:,.0f}",
+                "tf": ob["tf"],
+                "confidence": ob["confidence"],
+                "rsi_1h": rsi["1h"]
+            })
+            break
+    
+    for ob in analysis.get("bearish_obs", []):
+        if abs(ob["distance"]) < 3:
+            signals.append({
+                "symbol": symbol,
+                "signal": "SHORT",
+                "trigger": "OB",
+                "entry_price": price,
+                "ob_zone": f"${ob['bottom']:,.0f}-${ob['top']:,.0f}",
+                "tf": ob["tf"],
+                "confidence": ob["confidence"],
+                "rsi_1h": rsi["1h"]
+            })
+            break
+    
+    if rsi["1h"] <= 25 and rsi["4h"] <= 35:
+        signals.append({
+            "symbol": symbol,
+            "signal": "LONG",
+            "trigger": "RSI",
+            "entry_price": price,
+            "rsi_1h": rsi["1h"],
+            "rsi_4h": rsi["4h"],
+            "confidence": 60
+        })
+    elif rsi["1h"] >= 75 and rsi["4h"] >= 65:
+        signals.append({
+            "symbol": symbol,
+            "signal": "SHORT",
+            "trigger": "RSI",
+            "entry_price": price,
+            "rsi_1h": rsi["1h"],
+            "rsi_4h": rsi["4h"],
+            "confidence": 60
+        })
+    
+    sup_dist = (price - analysis["support"]) / price * 100
+    res_dist = (analysis["resistance"] - price) / price * 100
+    
+    if sup_dist < 1.5 and rsi["1h"] < 40:
+        signals.append({
+            "symbol": symbol,
+            "signal": "LONG",
+            "trigger": "SUPPORT",
+            "entry_price": price,
+            "level": analysis["support"],
+            "rsi_1h": rsi["1h"],
+            "confidence": 55
+        })
+    elif res_dist < 1.5 and rsi["1h"] > 60:
+        signals.append({
+            "symbol": symbol,
+            "signal": "SHORT",
+            "trigger": "RESISTANCE",
+            "entry_price": price,
+            "level": analysis["resistance"],
+            "rsi_1h": rsi["1h"],
+            "confidence": 55
+        })
+    
+    return signals
+
+def log_signals(signals):
+    if not signals:
+        return
+    
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    timestamp = now.isoformat()
+    
+    logs = load_json(SIGNAL_LOG)
+    if not isinstance(logs, list):
+        logs = []
+    
+    for sig in signals:
+        logs.append({
+            "ts": timestamp,
+            "symbol": sig["symbol"],
+            "signal": sig["signal"],
+            "trigger": sig["trigger"],
+            "entry_price": sig["entry_price"],
+            "confidence": sig.get("confidence", 50),
+            "rsi_1h": sig.get("rsi_1h", 50)
+        })
+    
+    cutoff = now - timedelta(days=7)
+    logs = [l for l in logs if datetime.fromisoformat(l["ts"]) > cutoff]
+    
+    save_json(SIGNAL_LOG, logs)
+    print(f"已記錄 {len(signals)} 個訊號")
+
 def analyze_symbol(symbol):
     klines_15m = get_klines(symbol, "15m", 96)
     klines_30m = get_klines(symbol, "30m", 96)
@@ -217,12 +343,18 @@ def main():
     print("=== Crypto Monitor Start ===")
     
     analyses = []
+    all_signals = []
+    
     for symbol in SYMBOLS:
         print(f"Analyzing {symbol}...")
         result = analyze_symbol(symbol)
         if result:
             analyses.append(result)
-            print(f"  OK: ${result['price']:,.2f}")
+            signals = detect_signals(result)
+            all_signals.extend(signals)
+            print(f"  OK: ${result['price']:,.2f}, {len(signals)} 訊號")
+    
+    log_signals(all_signals)
     
     if analyses:
         message = format_message(analyses)
