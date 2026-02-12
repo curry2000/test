@@ -1,6 +1,10 @@
 name: OI Scanner
 
 on:
+  push:
+    paths:
+      - 'oi_scanner.py'
+      - '.github/workflows/oi_scanner.yml'
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
