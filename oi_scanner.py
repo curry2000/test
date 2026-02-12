@@ -4,21 +4,22 @@ import json
 from datetime import datetime, timezone, timedelta
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-STATE_FILE = "/tmp/oi_state.json"
+STATE_FILE = "oi_state.json"
+SIGNAL_LOG = "signal_log.json"
 
-def load_state():
+def load_json(filepath):
     try:
-        with open(STATE_FILE, "r") as f:
+        with open(filepath, "r") as f:
             return json.load(f)
     except:
-        return {}
+        return {} if "state" in filepath else []
 
-def save_state(state):
+def save_json(filepath, data):
     try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
-    except:
-        pass
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"Save error: {e}")
 
 def get_okx_oi_data():
     results = []
@@ -84,23 +85,20 @@ def get_price_change_1h(symbol):
 
 def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 3 and price_change_1h > 1.5:
-        return "🟢 追多", "新多進場，趨勢向上"
+        return "LONG", "新多進場，趨勢向上"
     elif oi_change > 3 and price_change_1h < -1.5:
-        return "🔴 追空", "新空進場，趨勢向下"
+        return "SHORT", "新空進場，趨勢向下"
     elif oi_change < -3 and price_change_1h > 1.5:
-        return "⚠️ 觀望", "軋空反彈，動能不足"
+        return "WAIT", "軋空反彈，動能不足"
     elif oi_change < -3 and price_change_1h < -1.5:
-        return "⚠️ 觀望", "多頭平倉，恐慌拋售"
+        return "WAIT", "多頭平倉，恐慌拋售"
     elif abs(oi_change) > 5 and abs(price_change_1h) < 1:
-        return "⏳ 蓄勢", "多空對峙，即將變盤"
+        return "PENDING", "多空對峙，即將變盤"
     else:
-        return "⚪ 無訊號", ""
+        return "NONE", ""
 
-def format_number(n):
-    if n >= 1e9: return f"{n/1e9:.1f}B"
-    elif n >= 1e6: return f"{n/1e6:.1f}M"
-    elif n >= 1e3: return f"{n/1e3:.1f}K"
-    return f"{n:.0f}"
+def signal_emoji(signal):
+    return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "NONE": "⚪ 無訊號"}.get(signal, signal)
 
 def format_message(alerts, scanned):
     tw_tz = timezone(timedelta(hours=8))
@@ -117,7 +115,7 @@ def format_message(alerts, scanned):
         
         lines.append(f"**{a['symbol']}** ${a['price']:,.4g}")
         lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% | 價格1H: {price_dir} {a['price_change_1h']:+.1f}%")
-        lines.append(f"• 訊號: {a['signal']} — {a['reason']}")
+        lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {a['reason']}")
         lines.append("")
     
     return "\n".join(lines)
@@ -132,10 +130,37 @@ def send_discord(message):
     except Exception as e:
         print(f"Error: {e}")
 
+def log_signals(alerts):
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    timestamp = now.isoformat()
+    
+    logs = load_json(SIGNAL_LOG)
+    if not isinstance(logs, list):
+        logs = []
+    
+    for a in alerts:
+        if a["signal"] in ["LONG", "SHORT"]:
+            logs.append({
+                "ts": timestamp,
+                "symbol": a["symbol"],
+                "signal": a["signal"],
+                "entry_price": a["price"],
+                "oi_change": round(a["oi_change"], 2),
+                "price_change_1h": round(a["price_change_1h"], 2),
+                "checked": False
+            })
+    
+    cutoff = now - timedelta(days=7)
+    logs = [l for l in logs if datetime.fromisoformat(l["ts"]) > cutoff]
+    
+    save_json(SIGNAL_LOG, logs)
+    print(f"已記錄 {len([a for a in alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
+
 def main():
     print("=== OI Scanner Start ===")
     
-    prev_state = load_state()
+    prev_state = load_json(STATE_FILE)
     current_data = get_okx_oi_data()
     
     if not current_data:
@@ -173,13 +198,15 @@ def main():
                 "signal": signal,
                 "reason": reason
             })
-            print(f"🚨 {symbol}: OI {oi_change:+.1f}%, 價格1H {price_change_1h:+.1f}% → {signal}")
+            print(f"🚨 {symbol}: OI {oi_change:+.1f}%, 價格1H {price_change_1h:+.1f}% → {signal_emoji(signal)}")
     
-    save_state(current_state)
+    save_json(STATE_FILE, current_state)
     
     alerts.sort(key=lambda x: abs(x["oi_change"]), reverse=True)
     
-    actionable = [a for a in alerts if "追多" in a["signal"] or "追空" in a["signal"] or "蓄勢" in a["signal"]]
+    log_signals(alerts)
+    
+    actionable = [a for a in alerts if a["signal"] in ["LONG", "SHORT", "PENDING"]]
     
     if actionable:
         message = format_message(actionable, len(top_by_oi))
