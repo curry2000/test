@@ -155,11 +155,13 @@ if __name__ == "__main__":
     alerts = run_monitor()
     # 每次執行都發送狀態（測試用，之後可移除）
     if not alerts:
-        import requests
+        import requests as req
         webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
         if webhook:
             from datetime import datetime
             btc = get_binance_price("BTC")
             eth = get_binance_price("ETH")
-            msg = f"✅ **監控執行成功**\nBTC: ${btc['price']:,.2f}\nETH: ${eth['price']:,.2f}\n⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
-            requests.post(webhook, json={"content": msg, "username": "🔔 監控系統"}, timeout=10)
+            btc_price = btc['price'] if btc else 0
+            eth_price = eth['price'] if eth else 0
+            msg = f"✅ **監控執行成功**\nBTC: ${btc_price:,.2f}\nETH: ${eth_price:,.2f}\n⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
+            req.post(webhook, json={"content": msg, "username": "🔔 監控系統"}, timeout=10)
