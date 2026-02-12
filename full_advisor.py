@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 完整補倉顧問 - 三個倉位版本
-for 北鼻 ❤️
 """
 
 import requests

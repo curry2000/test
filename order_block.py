@@ -2,7 +2,6 @@
 """
 Order Block (訂單塊) 識別系統
 支援 BTC/ETH 的 15m/30m 時框
-by 寶貝 for Curry & 北鼻 ❤️
 """
 
 import requests
