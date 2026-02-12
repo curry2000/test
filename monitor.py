@@ -7,15 +7,29 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
 def get_klines(symbol, interval="1h", limit=100):
-    url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
-    try:
-        r = requests.get(url, timeout=15)
-        data = r.json()
-        if isinstance(data, list):
-            return data
-        return []
-    except:
-        return []
+    urls = [
+        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
+        f"https://api.bybit.com/v5/market/kline?category=linear&symbol={symbol}&interval={'60' if interval == '1h' else '15'}&limit={limit}"
+    ]
+    
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=15)
+            data = r.json()
+            
+            if "fapi.binance" in url:
+                if isinstance(data, list) and len(data) > 0:
+                    return data
+                print(f"    Binance returned: {str(data)[:100]}")
+            else:
+                if data.get("result", {}).get("list"):
+                    raw = data["result"]["list"]
+                    return [[int(k[0]), k[1], k[2], k[3], k[4], k[5]] for k in raw][::-1]
+        except Exception as e:
+            print(f"    Error from {url[:50]}: {e}")
+            continue
+    
+    return []
 
 def calculate_rsi(closes, period=14):
     if len(closes) < period + 1:
@@ -97,11 +111,21 @@ def find_order_blocks(klines, swing_length=3):
     return obs[-5:] if obs else []
 
 def analyze_symbol(symbol):
+    print(f"  Fetching 1H klines...")
     klines_1h = get_klines(symbol, "1h", 100)
-    klines_15m = get_klines(symbol, "15m", 100)
+    print(f"  Got {len(klines_1h)} 1H candles")
     
-    if not klines_1h or not klines_15m:
+    print(f"  Fetching 15M klines...")
+    klines_15m = get_klines(symbol, "15m", 100)
+    print(f"  Got {len(klines_15m)} 15M candles")
+    
+    if not klines_1h:
+        print(f"  ERROR: No 1H data for {symbol}")
         return None
+    
+    if not klines_15m:
+        print(f"  WARNING: No 15M data, using 1H only")
+        klines_15m = klines_1h
     
     closes_1h = [float(k[4]) for k in klines_1h]
     highs_1h = [float(k[2]) for k in klines_1h]
@@ -212,17 +236,27 @@ def main():
     analyses = []
     for symbol in SYMBOLS:
         print(f"\nAnalyzing {symbol}...")
-        result = analyze_symbol(symbol)
-        if result:
-            analyses.append(result)
-            print(f"  Price: ${result['price']:,.2f}")
-            print(f"  RSI(1H): {result['rsi_1h']:.1f}")
-            print(f"  OBs nearby: {len(result['order_blocks'])}")
+        try:
+            result = analyze_symbol(symbol)
+            if result:
+                analyses.append(result)
+                print(f"  ✅ Price: ${result['price']:,.2f}")
+                print(f"  ✅ RSI(1H): {result['rsi_1h']:.1f}")
+                print(f"  ✅ OBs nearby: {len(result['order_blocks'])}")
+            else:
+                print(f"  ❌ No result for {symbol}")
+        except Exception as e:
+            print(f"  ❌ Error analyzing {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    print(f"\nTotal analyses: {len(analyses)}")
     
     if analyses:
         send_discord(analyses)
+        print("✅ Sent to Discord")
     else:
-        print("No data to send")
+        print("❌ No data to send")
 
 if __name__ == "__main__":
     main()
