@@ -3,26 +3,50 @@ import requests
 import os
 from datetime import datetime
 
+print("=== OB Script Start ===")
+
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-SYMBOLS = ["BTC", "ETH"]
-TFS = ["15m", "30m"]
+print(f"Webhook URL exists: {bool(WEBHOOK)}")
+print(f"Webhook URL length: {len(WEBHOOK)}")
 
 def get_price(symbol):
     try:
-        r = requests.get(f"https://api.bybit.com/v5/market/tickers", params={"category": "linear", "symbol": f"{symbol}USDT"}, timeout=10)
-        return float(r.json()["result"]["list"][0]["lastPrice"])
-    except:
-        return 0
+        print(f"Getting price for {symbol}...")
+        r = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": f"{symbol}USDT"},
+            timeout=10
+        )
+        data = r.json()
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            price = float(data["result"]["list"][0]["lastPrice"])
+            print(f"{symbol} price: {price}")
+            return price
+    except Exception as e:
+        print(f"Price error for {symbol}: {e}")
+    return 0
 
 def get_klines(symbol, tf):
     try:
+        print(f"Getting klines for {symbol} {tf}...")
         interval_map = {"15m": "15", "30m": "30"}
-        r = requests.get("https://api.bybit.com/v5/market/kline", params={"category": "linear", "symbol": f"{symbol}USDT", "interval": interval_map[tf], "limit": 200}, timeout=15)
+        r = requests.get(
+            "https://api.bybit.com/v5/market/kline",
+            params={
+                "category": "linear",
+                "symbol": f"{symbol}USDT",
+                "interval": interval_map[tf],
+                "limit": 200
+            },
+            timeout=15
+        )
         data = r.json()
-        if data.get("retCode") == 0:
-            return [{"o": float(k[1]), "h": float(k[2]), "l": float(k[3]), "c": float(k[4])} for k in reversed(data["result"]["list"])]
-    except:
-        pass
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            klines = [{"o": float(k[1]), "h": float(k[2]), "l": float(k[3]), "c": float(k[4])} for k in reversed(data["result"]["list"])]
+            print(f"Got {len(klines)} klines for {symbol} {tf}")
+            return klines
+    except Exception as e:
+        print(f"Klines error for {symbol} {tf}: {e}")
     return []
 
 def find_obs(klines):
@@ -56,6 +80,7 @@ def find_obs(klines):
                     break
     
     current_idx = len(klines) - 1
+    
     valid_bullish = []
     for ob in bullish:
         if current_idx - ob["idx"] > 180:
@@ -99,16 +124,19 @@ def find_obs(klines):
     return unique_bull, unique_bear
 
 def main():
+    print("Building message...")
     lines = ["📊 **OB 訂單塊分析**", ""]
     
-    for symbol in SYMBOLS:
+    for symbol in ["BTC", "ETH"]:
         price = get_price(symbol)
         lines.append(f"**{symbol}** ${price:,.2f}")
         lines.append("")
         
-        for tf in TFS:
+        for tf in ["15m", "30m"]:
             klines = get_klines(symbol, tf)
             bullish, bearish = find_obs(klines)
+            
+            print(f"{symbol} {tf}: {len(bullish)} bullish, {len(bearish)} bearish OBs")
             
             bullish = sorted(bullish, key=lambda x: x["bh"], reverse=True)[:4]
             bearish = sorted(bearish, key=lambda x: x["bl"])[:4]
@@ -118,7 +146,7 @@ def main():
             if bearish:
                 lines.append("🔴 壓力區:")
                 for ob in bearish:
-                    dist = (ob["bl"] - price) / price * 100
+                    dist = (ob["bl"] - price) / price * 100 if price > 0 else 0
                     lines.append(f"   ${ob['bl']:,.0f}-${ob['bh']:,.0f} ({dist:+.1f}%)")
             else:
                 lines.append("🔴 壓力區: 無")
@@ -126,7 +154,7 @@ def main():
             if bullish:
                 lines.append("🟢 支撐區:")
                 for ob in bullish:
-                    dist = (price - ob["bh"]) / price * 100
+                    dist = (price - ob["bh"]) / price * 100 if price > 0 else 0
                     lines.append(f"   ${ob['bl']:,.0f}-${ob['bh']:,.0f} ({dist:+.1f}%)")
             else:
                 lines.append("🟢 支撐區: 無")
@@ -138,16 +166,26 @@ def main():
     lines.append(f"⏰ {datetime.now().strftime('%H:%M')}")
     
     msg = "\n".join(lines)
+    print("=" * 50)
+    print("MESSAGE:")
     print(msg)
+    print("=" * 50)
     
     if WEBHOOK:
+        print("Sending to Discord...")
         try:
-            r = requests.post(WEBHOOK, json={"content": msg, "username": "📊 OB 訂單塊"}, timeout=10)
-            print(f"Webhook: {r.status_code}")
+            r = requests.post(
+                WEBHOOK,
+                json={"content": msg, "username": "📊 OB 訂單塊"},
+                timeout=10
+            )
+            print(f"Discord response: {r.status_code} - {r.text[:100] if r.text else 'empty'}")
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Discord error: {e}")
     else:
-        print("NO WEBHOOK URL!")
+        print("NO WEBHOOK URL - skipping Discord send")
+    
+    print("=== OB Script End ===")
 
 if __name__ == "__main__":
     main()
