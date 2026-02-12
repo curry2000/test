@@ -6,47 +6,95 @@ from datetime import datetime
 print("=== OB Script Start ===")
 
 WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-print(f"Webhook URL exists: {bool(WEBHOOK)}")
-print(f"Webhook URL length: {len(WEBHOOK)}")
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 def get_price(symbol):
+    # Try OKX first
     try:
-        print(f"Getting price for {symbol}...")
+        r = requests.get(
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": f"{symbol}-USDT-SWAP"},
+            headers=HEADERS,
+            timeout=10
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            price = float(data["data"][0]["last"])
+            print(f"{symbol} price (OKX): {price}")
+            return price
+    except Exception as e:
+        print(f"OKX price error: {e}")
+    
+    # Try Bybit
+    try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
             params={"category": "linear", "symbol": f"{symbol}USDT"},
+            headers=HEADERS,
             timeout=10
         )
         data = r.json()
         if data.get("retCode") == 0 and data.get("result", {}).get("list"):
             price = float(data["result"]["list"][0]["lastPrice"])
-            print(f"{symbol} price: {price}")
+            print(f"{symbol} price (Bybit): {price}")
             return price
     except Exception as e:
-        print(f"Price error for {symbol}: {e}")
+        print(f"Bybit price error: {e}")
+    
+    # Try CoinGecko
+    try:
+        coin_id = "bitcoin" if symbol == "BTC" else "ethereum"
+        r = requests.get(
+            f"https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": coin_id, "vs_currencies": "usd"},
+            headers=HEADERS,
+            timeout=10
+        )
+        data = r.json()
+        if coin_id in data:
+            price = float(data[coin_id]["usd"])
+            print(f"{symbol} price (CoinGecko): {price}")
+            return price
+    except Exception as e:
+        print(f"CoinGecko price error: {e}")
+    
     return 0
 
 def get_klines(symbol, tf):
+    # Try OKX first
     try:
-        print(f"Getting klines for {symbol} {tf}...")
+        interval_map = {"15m": "15m", "30m": "30m"}
+        r = requests.get(
+            "https://www.okx.com/api/v5/market/candles",
+            params={"instId": f"{symbol}-USDT-SWAP", "bar": interval_map[tf], "limit": "200"},
+            headers=HEADERS,
+            timeout=15
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            klines = [{"o": float(k[1]), "h": float(k[2]), "l": float(k[3]), "c": float(k[4])} for k in reversed(data["data"])]
+            print(f"{symbol} {tf} klines (OKX): {len(klines)}")
+            return klines
+    except Exception as e:
+        print(f"OKX klines error: {e}")
+    
+    # Try Bybit
+    try:
         interval_map = {"15m": "15", "30m": "30"}
         r = requests.get(
             "https://api.bybit.com/v5/market/kline",
-            params={
-                "category": "linear",
-                "symbol": f"{symbol}USDT",
-                "interval": interval_map[tf],
-                "limit": 200
-            },
+            params={"category": "linear", "symbol": f"{symbol}USDT", "interval": interval_map[tf], "limit": 200},
+            headers=HEADERS,
             timeout=15
         )
         data = r.json()
         if data.get("retCode") == 0 and data.get("result", {}).get("list"):
             klines = [{"o": float(k[1]), "h": float(k[2]), "l": float(k[3]), "c": float(k[4])} for k in reversed(data["result"]["list"])]
-            print(f"Got {len(klines)} klines for {symbol} {tf}")
+            print(f"{symbol} {tf} klines (Bybit): {len(klines)}")
             return klines
     except Exception as e:
-        print(f"Klines error for {symbol} {tf}: {e}")
+        print(f"Bybit klines error: {e}")
+    
     return []
 
 def find_obs(klines):
@@ -106,25 +154,13 @@ def find_obs(klines):
             valid_bearish.append(ob)
     
     seen = set()
-    unique_bull = []
-    for ob in valid_bullish:
-        key = f"{ob['bl']:.0f}"
-        if key not in seen:
-            seen.add(key)
-            unique_bull.append(ob)
-    
+    unique_bull = [ob for ob in valid_bullish if not (f"{ob['bl']:.0f}" in seen or seen.add(f"{ob['bl']:.0f}"))]
     seen = set()
-    unique_bear = []
-    for ob in valid_bearish:
-        key = f"{ob['bl']:.0f}"
-        if key not in seen:
-            seen.add(key)
-            unique_bear.append(ob)
+    unique_bear = [ob for ob in valid_bearish if not (f"{ob['bl']:.0f}" in seen or seen.add(f"{ob['bl']:.0f}"))]
     
     return unique_bull, unique_bear
 
 def main():
-    print("Building message...")
     lines = ["📊 **OB 訂單塊分析**", ""]
     
     for symbol in ["BTC", "ETH"]:
@@ -136,7 +172,7 @@ def main():
             klines = get_klines(symbol, tf)
             bullish, bearish = find_obs(klines)
             
-            print(f"{symbol} {tf}: {len(bullish)} bullish, {len(bearish)} bearish OBs")
+            print(f"{symbol} {tf}: {len(bullish)} bullish, {len(bearish)} bearish")
             
             bullish = sorted(bullish, key=lambda x: x["bh"], reverse=True)[:4]
             bearish = sorted(bearish, key=lambda x: x["bl"])[:4]
@@ -166,26 +202,17 @@ def main():
     lines.append(f"⏰ {datetime.now().strftime('%H:%M')}")
     
     msg = "\n".join(lines)
-    print("=" * 50)
     print("MESSAGE:")
     print(msg)
-    print("=" * 50)
     
     if WEBHOOK:
-        print("Sending to Discord...")
         try:
-            r = requests.post(
-                WEBHOOK,
-                json={"content": msg, "username": "📊 OB 訂單塊"},
-                timeout=10
-            )
-            print(f"Discord response: {r.status_code} - {r.text[:100] if r.text else 'empty'}")
+            r = requests.post(WEBHOOK, json={"content": msg, "username": "📊 OB 訂單塊"}, timeout=10)
+            print(f"Discord: {r.status_code}")
         except Exception as e:
             print(f"Discord error: {e}")
-    else:
-        print("NO WEBHOOK URL - skipping Discord send")
     
-    print("=== OB Script End ===")
+    print("=== Done ===")
 
 if __name__ == "__main__":
     main()
