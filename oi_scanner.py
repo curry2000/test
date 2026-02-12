@@ -34,11 +34,11 @@ def get_top_symbols():
     usdt_tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
     return [t["symbol"] for t in usdt_tickers[:100]]
 
-def get_oi_history_batch(symbols):
+def get_oi_history_batch(symbols, period="5m"):
     results = {}
     for symbol in symbols:
         try:
-            url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period=1h&limit=2"
+            url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period={period}&limit=2"
             r = requests.get(url, timeout=5)
             data = r.json()
             if isinstance(data, list) and len(data) >= 2:
@@ -49,11 +49,11 @@ def get_oi_history_batch(symbols):
             pass
     return results
 
-def get_price_history_batch(symbols):
+def get_price_history_batch(symbols, interval="5m"):
     results = {}
     for symbol in symbols:
         try:
-            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=2"
+            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=2"
             r = requests.get(url, timeout=5)
             data = r.json()
             if len(data) >= 2:
@@ -111,8 +111,8 @@ def send_discord_alert(alerts):
             "title": f"🚨 {a['symbol']} OI 異動",
             "color": color,
             "fields": [
-                {"name": "📊 1H OI變動", "value": f"{a['oi_change']:+.2f}%", "inline": True},
-                {"name": "💰 1H價格變動", "value": f"{a['price_change']:+.2f}%", "inline": True},
+                {"name": "📊 5M OI變動", "value": f"{a['oi_change']:+.2f}%", "inline": True},
+                {"name": "💰 5M價格變動", "value": f"{a['price_change']:+.2f}%", "inline": True},
                 {"name": "📈 24H變動", "value": f"{a['change_24h']:+.2f}%", "inline": True},
                 {"name": "🎯 現價", "value": f"${a['price']:.6g}", "inline": True},
                 {"name": "📦 OI金額", "value": f"${format_number(a['oi_value'])}", "inline": True},
@@ -177,13 +177,13 @@ def main():
         
         is_alert = False
         
-        if abs(oi_change) >= 5 and abs(price_change) >= 3:
+        if abs(oi_change) >= 2 and abs(price_change) >= 1.5:
             is_alert = True
         
-        if abs(oi_change) >= 6 and oi_mc_ratio >= 15:
+        if abs(oi_change) >= 3 and oi_mc_ratio >= 10:
             is_alert = True
         
-        if abs(oi_change) >= 8:
+        if abs(oi_change) >= 4:
             is_alert = True
         
         if is_alert:
