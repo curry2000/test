@@ -21,6 +21,12 @@ def save_json(filepath, data):
     except Exception as e:
         print(f"Save error: {e}")
 
+def format_number(n):
+    if n >= 1e9: return f"{n/1e9:.1f}B"
+    elif n >= 1e6: return f"{n/1e6:.1f}M"
+    elif n >= 1e3: return f"{n/1e3:.1f}K"
+    return f"{n:.0f}"
+
 def get_okx_oi_data():
     results = []
     
@@ -100,29 +106,30 @@ def get_direction_signal(oi_change, price_change_1h):
 def signal_emoji(signal):
     return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "NONE": "⚪ 無訊號"}.get(signal, signal)
 
-def format_message(alerts, scanned):
+def format_message(alerts, scanned, is_smallcap=False):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
     if not alerts:
-        return f"✅ **OI 掃描** | {now}\n掃描 {scanned} 幣種，無顯著異動"
+        return None
     
-    lines = [f"🔍 **OI 異動掃描** | {now}", f"掃描 {scanned} 幣種，發現 {len(alerts)} 個異動", ""]
+    title = "🚀 **小幣大波動**" if is_smallcap else "🔍 **OI 異動掃描**"
+    lines = [f"{title} | {now}", f"掃描 {scanned} 幣種，發現 {len(alerts)} 個異動", ""]
     
     for a in alerts[:10]:
         oi_dir = "📈" if a["oi_change"] > 0 else "📉"
         price_dir = "📈" if a["price_change_1h"] > 0 else "📉"
         
         lines.append(f"**{a['symbol']}** ${a['price']:,.4g}")
-        lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% | 價格1H: {price_dir} {a['price_change_1h']:+.1f}%")
+        lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a['oi'])})")
+        lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
         lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {a['reason']}")
         lines.append("")
     
     return "\n".join(lines)
 
 def send_discord(message):
-    if not DISCORD_WEBHOOK:
-        print("No webhook")
+    if not DISCORD_WEBHOOK or not message:
         return
     try:
         r = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
@@ -155,7 +162,6 @@ def log_signals(alerts):
     logs = [l for l in logs if datetime.fromisoformat(l["ts"]) > cutoff]
     
     save_json(SIGNAL_LOG, logs)
-    print(f"已記錄 {len([a for a in alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
 
 def main():
     print("=== OI Scanner Start ===")
@@ -169,12 +175,14 @@ def main():
     
     print(f"獲取 {len(current_data)} 個幣種")
     
+    sorted_by_oi = sorted(current_data, key=lambda x: x["oi"], reverse=True)
+    top_100 = set(c["symbol"] for c in sorted_by_oi[:100])
+    
     current_state = {}
-    alerts = []
+    top_alerts = []
+    smallcap_alerts = []
     
-    top_by_oi = sorted(current_data, key=lambda x: x["oi"], reverse=True)[:100]
-    
-    for coin in top_by_oi:
+    for coin in current_data:
         symbol = coin["symbol"]
         current_state[symbol] = {"oi": coin["oi"], "price": coin["price"]}
         
@@ -184,36 +192,64 @@ def main():
         else:
             oi_change = 0
         
-        price_change_1h = get_price_change_1h(symbol)
+        is_top = symbol in top_100
         
+        if is_top:
+            threshold_oi = 3
+            threshold_price = 3
+        else:
+            threshold_oi = 8
+            threshold_price = 10
+        
+        if abs(oi_change) < threshold_oi and abs(coin["change_24h"]) < threshold_price:
+            continue
+        
+        price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
-        if abs(oi_change) >= 3 or abs(price_change_1h) >= 3:
-            alerts.append({
-                "symbol": symbol,
-                "price": coin["price"],
-                "oi": coin["oi"],
-                "oi_change": oi_change,
-                "price_change_1h": price_change_1h,
-                "signal": signal,
-                "reason": reason
-            })
-            print(f"🚨 {symbol}: OI {oi_change:+.1f}%, 價格1H {price_change_1h:+.1f}% → {signal_emoji(signal)}")
+        alert = {
+            "symbol": symbol,
+            "price": coin["price"],
+            "oi": coin["oi"],
+            "oi_change": oi_change,
+            "price_change_1h": price_change_1h,
+            "change_24h": coin["change_24h"],
+            "signal": signal,
+            "reason": reason
+        }
+        
+        if is_top:
+            if abs(oi_change) >= 3 or abs(price_change_1h) >= 3:
+                top_alerts.append(alert)
+                print(f"🚨 [TOP] {symbol}: OI {oi_change:+.1f}%, 1H {price_change_1h:+.1f}% → {signal_emoji(signal)}")
+        else:
+            if (abs(oi_change) >= 8 and abs(price_change_1h) >= 5) or abs(coin["change_24h"]) >= 20:
+                smallcap_alerts.append(alert)
+                print(f"🚀 [SMALL] {symbol}: OI {oi_change:+.1f}%, 24H {coin['change_24h']:+.1f}% → {signal_emoji(signal)}")
     
     save_json(STATE_FILE, current_state)
     
-    alerts.sort(key=lambda x: abs(x["oi_change"]), reverse=True)
+    top_alerts.sort(key=lambda x: abs(x["oi_change"]), reverse=True)
+    smallcap_alerts.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
     
-    log_signals(alerts)
+    all_alerts = top_alerts + smallcap_alerts
+    log_signals(all_alerts)
+    print(f"已記錄 {len([a for a in all_alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
     
-    actionable = [a for a in alerts if a["signal"] in ["LONG", "SHORT", "PENDING"]]
+    top_actionable = [a for a in top_alerts if a["signal"] in ["LONG", "SHORT", "PENDING"]]
+    if top_actionable:
+        msg = format_message(top_actionable, 100, is_smallcap=False)
+        print("\n" + msg)
+        send_discord(msg)
     
-    if actionable:
-        message = format_message(actionable, len(top_by_oi))
-        print("\n" + message)
-        send_discord(message)
-    else:
-        print(f"\n掃描 {len(top_by_oi)} 幣種，無明確多空訊號")
+    smallcap_actionable = [a for a in smallcap_alerts if a["signal"] in ["LONG", "SHORT"]]
+    if smallcap_actionable:
+        msg = format_message(smallcap_actionable, len(current_data) - 100, is_smallcap=True)
+        print("\n" + msg)
+        send_discord(msg)
+    
+    if not top_actionable and not smallcap_actionable:
+        print(f"\n掃描 {len(current_data)} 幣種，無明確訊號")
 
 if __name__ == "__main__":
     main()
