@@ -265,11 +265,10 @@ def run_monitor():
                 direction = "📈 增加" if oi_change > 0 else "📉 減少"
                 alerts.append(f"📊 {symbol} OI {direction} {abs(oi_change)*100:.1f}%")
         
-        # RSI 監控
-        for tf in ["1h", "4h"]:
+        # RSI 監控 (15m, 30m, 1h, 4h)
+        for tf in ["15m", "30m", "1h", "4h"]:
             rsi = get_rsi(symbol, tf)
             if rsi:
-                key = f"{symbol}_rsi_{tf}_{int(rsi/10)*10}"  # 每10為一個區間
                 if rsi <= RSI_OVERSOLD and f"{symbol}_oversold_{tf}" not in triggered:
                     alerts.append(f"🔴 {symbol} {tf} RSI 超賣！RSI={rsi} (<{RSI_OVERSOLD})")
                     triggered.append(f"{symbol}_oversold_{tf}")
@@ -314,21 +313,24 @@ if __name__ == "__main__":
             btc_src = btc.get('source', '?') if btc else '?'
             eth_src = eth.get('source', '?') if eth else '?'
             
-            # 取得 RSI
-            btc_rsi_1h = get_rsi("BTC", "1h") or 0
-            btc_rsi_4h = get_rsi("BTC", "4h") or 0
-            eth_rsi_1h = get_rsi("ETH", "1h") or 0
-            eth_rsi_4h = get_rsi("ETH", "4h") or 0
-            
+            # 取得 RSI (15m, 30m, 1h, 4h)
             def rsi_emoji(rsi):
+                if rsi is None or rsi == 0: return "❓"
                 if rsi <= 30: return "🔴"
                 if rsi >= 70: return "🟢"
                 return "⚪"
             
+            def get_rsi_line(symbol):
+                rsis = {}
+                for tf in ["15m", "30m", "1h", "4h"]:
+                    rsis[tf] = get_rsi(symbol, tf) or 0
+                return f"  15m:{rsi_emoji(rsis['15m'])}{rsis['15m']} | 30m:{rsi_emoji(rsis['30m'])}{rsis['30m']} | 1H:{rsi_emoji(rsis['1h'])}{rsis['1h']} | 4H:{rsi_emoji(rsis['4h'])}{rsis['4h']}"
+            
             msg = f"✅ **監控執行成功** (via {btc_src})\n\n"
             msg += f"**BTC** ${btc_price:,.2f}\n"
-            msg += f"  RSI 1H: {rsi_emoji(btc_rsi_1h)} {btc_rsi_1h} | 4H: {rsi_emoji(btc_rsi_4h)} {btc_rsi_4h}\n\n"
+            msg += get_rsi_line("BTC") + "\n\n"
             msg += f"**ETH** ${eth_price:,.2f}\n"
-            msg += f"  RSI 1H: {rsi_emoji(eth_rsi_1h)} {eth_rsi_1h} | 4H: {rsi_emoji(eth_rsi_4h)} {eth_rsi_4h}\n\n"
+            msg += get_rsi_line("ETH") + "\n\n"
+            msg += f"🔴<30超賣 | ⚪中性 | 🟢>70超買\n"
             msg += f"⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
             req.post(webhook, json={"content": msg, "username": "🔔 監控系統"}, timeout=10)
