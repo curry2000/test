@@ -13,8 +13,13 @@ def get_all_tickers():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
     try:
         r = requests.get(url, timeout=15)
-        return r.json()
-    except:
+        data = r.json()
+        if isinstance(data, list):
+            return data
+        print(f"Binance API error: {data}")
+        return []
+    except Exception as e:
+        print(f"get_all_tickers error: {e}")
         return []
 
 def get_all_oi():
@@ -149,7 +154,13 @@ def main():
     
     print("Getting top 100 symbols by volume...")
     tickers = get_all_tickers()
-    usdt_tickers = [t for t in tickers if t["symbol"].endswith("USDT")]
+    
+    if not tickers:
+        print("ERROR: Failed to get tickers from Binance")
+        return
+    
+    print(f"Got {len(tickers)} tickers")
+    usdt_tickers = [t for t in tickers if isinstance(t, dict) and t.get("symbol", "").endswith("USDT")]
     usdt_tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
     top_symbols = usdt_tickers[:100]
     
