@@ -22,7 +22,4 @@ jobs:
       - name: Run OI Scanner
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          echo "Starting script..."
-          python -u oi_scanner.py
-          echo "Script finished with code $?"
+        run: python oi_scanner.py
