@@ -1,4 +1,4 @@
-name: OB Large Timeframe
+name: Key Levels
 
 on:
   schedule:
@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       
-      - name: Run OB Large TF Analysis
+      - name: Run Key Levels Analysis
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python ob_large_tf.py
+        run: python key_levels.py
