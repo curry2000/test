@@ -2,6 +2,7 @@ import requests
 import os
 import json
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = os.path.expanduser("~/.openclaw/oi_state_local.json")
@@ -28,85 +29,35 @@ def format_number(n):
     elif n >= 1e3: return f"{n/1e3:.1f}K"
     return f"{n:.0f}"
 
-def get_binance_data():
-    results = []
-    
+def get_all_tickers():
     try:
-        ticker_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-        r = requests.get(ticker_url, timeout=15)
-        tickers = {t["symbol"]: t for t in r.json() if t["symbol"].endswith("USDT")}
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            return [t for t in r.json() if t["symbol"].endswith("USDT")]
     except Exception as e:
         print(f"Ticker error: {e}")
-        return results
-    
-    try:
-        oi_url = "https://fapi.binance.com/fapi/v1/openInterest"
-        for symbol in list(tickers.keys())[:300]:
-            try:
-                r = requests.get(f"{oi_url}?symbol={symbol}", timeout=5)
-                data = r.json()
-                if "openInterest" in data:
-                    t = tickers[symbol]
-                    price = float(t["lastPrice"])
-                    oi_usd = float(data["openInterest"]) * price
-                    results.append({
-                        "symbol": symbol.replace("USDT", ""),
-                        "price": price,
-                        "change_24h": float(t["priceChangePercent"]),
-                        "volume": float(t["quoteVolume"]),
-                        "oi": oi_usd
-                    })
-            except:
-                continue
-    except Exception as e:
-        print(f"OI error: {e}")
-    
-    return results
+    return []
 
-def get_binance_oi_batch():
-    results = []
-    
+def get_oi_for_symbol(symbol):
     try:
-        ticker_url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-        r = requests.get(ticker_url, timeout=15)
-        if r.status_code != 200:
-            print(f"Binance blocked: {r.status_code}")
-            return results
-        tickers = {t["symbol"]: t for t in r.json() if t["symbol"].endswith("USDT")}
-        
-        oi_url = "https://fapi.binance.com/fapi/v1/openInterest"
-        for symbol, t in tickers.items():
-            try:
-                r = requests.get(f"{oi_url}?symbol={symbol}", timeout=5)
-                if r.status_code == 200:
-                    data = r.json()
-                    price = float(t["lastPrice"])
-                    oi_usd = float(data.get("openInterest", 0)) * price
-                    results.append({
-                        "symbol": symbol.replace("USDT", ""),
-                        "price": price,
-                        "change_24h": float(t["priceChangePercent"]),
-                        "volume": float(t["quoteVolume"]),
-                        "oi": oi_usd
-                    })
-            except:
-                continue
-        
-        print(f"Binance: {len(results)} coins")
-    except Exception as e:
-        print(f"Binance error: {e}")
-    
-    return results
+        url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            return symbol, float(r.json().get("openInterest", 0))
+    except:
+        pass
+    return symbol, 0
 
 def get_price_change_1h(symbol):
     try:
-        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}USDT&interval=1h&limit=2"
-        r = requests.get(url, timeout=10)
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=2"
+        r = requests.get(url, timeout=5)
         data = r.json()
         if isinstance(data, list) and len(data) >= 2:
-            old_price = float(data[-2][4])
-            new_price = float(data[-1][4])
-            return (new_price - old_price) / old_price * 100 if old_price > 0 else 0
+            old_close = float(data[-2][4])
+            new_close = float(data[-1][4])
+            return (new_close - old_close) / old_close * 100 if old_close > 0 else 0
     except:
         pass
     return 0
@@ -128,23 +79,22 @@ def get_direction_signal(oi_change, price_change_1h):
 def signal_emoji(signal):
     return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "NONE": "⚪ 無訊號"}.get(signal, signal)
 
-def format_message(alerts, scanned, is_smallcap=False):
+def format_message(alerts, scanned):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
     if not alerts:
         return None
     
-    title = "🚀 **小幣大波動**" if is_smallcap else "🔍 **OI 異動掃描**"
-    source = "[BN本地]"
-    lines = [f"{title} {source} | {now}", f"掃描 {scanned} 幣種，發現 {len(alerts)} 個異動", ""]
+    lines = [f"🔍 **OI 異動掃描** [BN本地] | {now}", f"掃描 {scanned} 幣種，發現 {len(alerts)} 個異動", ""]
     
     for a in alerts[:10]:
-        oi_dir = "📈" if a["oi_change"] > 0 else "📉"
+        oi_dir = "📈" if a.get("oi_change", 0) > 0 else "📉"
         price_dir = "📈" if a["price_change_1h"] > 0 else "📉"
         
         lines.append(f"**{a['symbol']}** ${a['price']:,.4g}")
-        lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a['oi'])})")
+        if a.get("oi_change"):
+            lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a.get('oi', 0))})")
         lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
         lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {a['reason']}")
         lines.append("")
@@ -176,8 +126,8 @@ def log_signals(alerts):
                 "symbol": a["symbol"],
                 "signal": a["signal"],
                 "entry_price": a["price"],
-                "oi_change": round(a["oi_change"], 2),
-                "price_change_1h": round(a["price_change_1h"], 2),
+                "oi_change": a.get("oi_change", 0),
+                "price_change_1h": a["price_change_1h"],
                 "source": "binance"
             })
     
@@ -189,90 +139,89 @@ def log_signals(alerts):
 def main():
     print("=== OI Scanner (Binance Local) ===")
     
-    prev_state = load_json(STATE_FILE)
-    current_data = get_binance_oi_batch()
-    
-    if not current_data:
-        print("No data from Binance")
+    tickers = get_all_tickers()
+    if not tickers:
+        print("No tickers")
         return
     
-    print(f"獲取 {len(current_data)} 個幣種")
+    print(f"獲取 {len(tickers)} 個幣種")
     
-    sorted_by_oi = sorted(current_data, key=lambda x: x["oi"], reverse=True)
-    top_100 = set(c["symbol"] for c in sorted_by_oi[:100])
+    prev_state = load_json(STATE_FILE)
     
-    current_state = {}
-    top_alerts = []
-    smallcap_alerts = []
-    
-    for coin in current_data:
-        symbol = coin["symbol"]
-        current_state[symbol] = {"oi": coin["oi"], "price": coin["price"]}
+    candidates = []
+    for t in tickers:
+        symbol = t["symbol"]
+        price = float(t["lastPrice"])
+        change_24h = float(t["priceChangePercent"])
+        volume = float(t["quoteVolume"])
         
-        if symbol in prev_state:
-            prev_oi = prev_state[symbol].get("oi", coin["oi"])
-            oi_change = (coin["oi"] - prev_oi) / prev_oi * 100 if prev_oi > 0 else 0
-        else:
-            oi_change = 0
-        
-        is_top = symbol in top_100
-        
-        if is_top:
-            threshold_oi = 3
-            threshold_price = 3
-        else:
-            threshold_oi = 8
-            threshold_price = 10
-        
-        if abs(oi_change) < threshold_oi and abs(coin["change_24h"]) < threshold_price:
+        if volume < 1000000:
             continue
+        
+        if abs(change_24h) >= 10:
+            candidates.append({
+                "symbol": symbol.replace("USDT", ""),
+                "full_symbol": symbol,
+                "price": price,
+                "change_24h": change_24h,
+                "volume": volume
+            })
+    
+    print(f"篩選出 {len(candidates)} 個候選幣種 (24H變動>10%)")
+    
+    alerts = []
+    current_state = {}
+    
+    for coin in candidates[:50]:
+        symbol = coin["full_symbol"]
+        base = coin["symbol"]
+        
+        _, oi = get_oi_for_symbol(symbol)
+        if oi == 0:
+            continue
+        
+        oi_usd = oi * coin["price"]
+        current_state[base] = {"oi": oi_usd, "price": coin["price"]}
+        
+        oi_change = 0
+        if base in prev_state:
+            prev_oi = prev_state[base].get("oi", oi_usd)
+            if prev_oi > 0:
+                oi_change = (oi_usd - prev_oi) / prev_oi * 100
         
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
-        alert = {
-            "symbol": symbol,
-            "price": coin["price"],
-            "oi": coin["oi"],
-            "oi_change": oi_change,
-            "price_change_1h": price_change_1h,
-            "change_24h": coin["change_24h"],
-            "signal": signal,
-            "reason": reason
-        }
-        
-        if is_top:
-            if abs(oi_change) >= 3 or abs(price_change_1h) >= 3:
-                top_alerts.append(alert)
-                print(f"🚨 [TOP] {symbol}: OI {oi_change:+.1f}%, 1H {price_change_1h:+.1f}%")
-        else:
-            if (abs(oi_change) >= 8 and abs(price_change_1h) >= 5) or abs(coin["change_24h"]) >= 20:
-                smallcap_alerts.append(alert)
-                print(f"🚀 [SMALL] {symbol}: OI {oi_change:+.1f}%, 24H {coin['change_24h']:+.1f}%")
+        if signal != "NONE" or abs(coin["change_24h"]) >= 15:
+            alerts.append({
+                "symbol": base,
+                "price": coin["price"],
+                "oi": oi_usd,
+                "oi_change": oi_change,
+                "price_change_1h": price_change_1h,
+                "change_24h": coin["change_24h"],
+                "signal": signal if signal != "NONE" else ("LONG" if coin["change_24h"] > 0 else "SHORT"),
+                "reason": reason if reason else ("24H大漲" if coin["change_24h"] > 0 else "24H大跌")
+            })
+            print(f"🚨 {base}: 24H {coin['change_24h']:+.1f}%, 1H {price_change_1h:+.1f}%, OI {oi_change:+.1f}%")
+    
+    for base, data in prev_state.items():
+        if base not in current_state:
+            current_state[base] = data
     
     save_json(STATE_FILE, current_state)
     
-    top_alerts.sort(key=lambda x: abs(x["oi_change"]), reverse=True)
-    smallcap_alerts.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
+    alerts.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
     
-    all_alerts = top_alerts + smallcap_alerts
-    log_signals(all_alerts)
-    print(f"已記錄 {len([a for a in all_alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
+    log_signals(alerts)
+    print(f"已記錄 {len([a for a in alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
     
-    top_actionable = [a for a in top_alerts if a["signal"] in ["LONG", "SHORT", "PENDING"]]
-    if top_actionable:
-        msg = format_message(top_actionable, 100, is_smallcap=False)
-        print("\n" + msg)
-        send_discord(msg)
-    
-    smallcap_actionable = [a for a in smallcap_alerts if a["signal"] in ["LONG", "SHORT"]]
-    if smallcap_actionable:
-        msg = format_message(smallcap_actionable, len(current_data) - 100, is_smallcap=True)
-        print("\n" + msg)
-        send_discord(msg)
-    
-    if not top_actionable and not smallcap_actionable:
-        print(f"掃描 {len(current_data)} 幣種，無明確訊號")
+    if alerts:
+        message = format_message(alerts, len(tickers))
+        print("\n" + message)
+        send_discord(message)
+    else:
+        print(f"掃描 {len(tickers)} 幣種，無明確訊號")
 
 if __name__ == "__main__":
     main()
