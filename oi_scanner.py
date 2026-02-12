@@ -1,255 +1,191 @@
 import requests
 import os
-import sys
 from datetime import datetime, timezone, timedelta
 
-print(f"Python {sys.version}")
-print(f"Starting OI Scanner...")
-
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-print(f"Webhook configured: {bool(DISCORD_WEBHOOK)}")
 
 def get_all_tickers():
-    url = "https://www.okx.com/api/v5/market/tickers?instType=SWAP"
+    print("Fetching tickers...")
+    
+    print("  [1] Trying OKX...")
     try:
+        url = "https://www.okx.com/api/v5/market/tickers?instType=SWAP"
         r = requests.get(url, timeout=15)
         data = r.json()
         if data.get("code") == "0" and data.get("data"):
             tickers = []
             for t in data["data"]:
                 if "-USDT-SWAP" in t["instId"]:
-                    symbol = t["instId"].replace("-USDT-SWAP", "USDT")
+                    symbol = t["instId"].replace("-USDT-SWAP", "") + "USDT"
+                    open_price = float(t.get("open24h", 0))
                     tickers.append({
                         "symbol": symbol,
-                        "lastPrice": t["last"],
-                        "priceChangePercent": float(t["last"]) / float(t["open24h"]) * 100 - 100 if float(t["open24h"]) > 0 else 0,
-                        "quoteVolume": float(t["volCcy24h"])
+                        "lastPrice": float(t["last"]),
+                        "priceChangePercent": (float(t["last"]) / open_price * 100 - 100) if open_price > 0 else 0,
+                        "quoteVolume": float(t.get("volCcy24h", 0))
                     })
-            print(f"OKX returned {len(tickers)} tickers")
+            print(f"  ✓ OKX: {len(tickers)} tickers")
             return tickers
-        print(f"OKX API error: {data.get('msg', 'Unknown')}")
-        return []
+        print(f"  ✗ OKX: {data.get('msg', 'error')}")
     except Exception as e:
-        print(f"get_all_tickers error: {e}")
-        return []
-
-def get_top_symbols():
-    tickers = get_all_tickers()
-    tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
-    return [t["symbol"] for t in tickers[:100]]
-
-def get_oi_history_batch(symbols, period="1h"):
-    results = {}
-    for symbol in symbols:
-        try:
-            base = symbol.replace("USDT", "")
-            okx_symbol = f"{base}-USDT-SWAP"
-            
-            url = f"https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId={okx_symbol}&period={period}"
-            r = requests.get(url, timeout=10)
-            data = r.json()
-            
-            if data.get("code") == "0" and data.get("data") and len(data["data"]) >= 2:
-                sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-                old_oi = float(sorted_data[-2][1])
-                new_oi = float(sorted_data[-1][1])
-                results[symbol] = {"old": old_oi, "new": new_oi}
-        except Exception as e:
-            pass
-    return results
-
-def get_price_history_batch(symbols, interval="1h"):
-    results = {}
-    okx_interval = "1H" if interval == "1h" else "15m"
+        print(f"  ✗ OKX: {e}")
     
-    for symbol in symbols:
+    print("  [2] Trying Binance Spot...")
+    try:
+        url = "https://api.binance.com/api/v3/ticker/24hr"
+        r = requests.get(url, timeout=15)
+        data = r.json()
+        if isinstance(data, list):
+            tickers = [{"symbol": t["symbol"], "lastPrice": float(t["lastPrice"]), 
+                       "priceChangePercent": float(t["priceChangePercent"]),
+                       "quoteVolume": float(t["quoteVolume"])} 
+                      for t in data if t["symbol"].endswith("USDT")]
+            print(f"  ✓ Binance Spot: {len(tickers)} tickers")
+            return tickers
+    except Exception as e:
+        print(f"  ✗ Binance Spot: {e}")
+    
+    return []
+
+def get_oi_and_price_data(symbols):
+    print(f"Fetching OI & price for {len(symbols)} symbols...")
+    results = {}
+    
+    for symbol in symbols[:50]:
+        base = symbol.replace("USDT", "")
+        
         try:
-            base = symbol.replace("USDT", "")
             okx_symbol = f"{base}-USDT-SWAP"
             
-            url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={okx_interval}&limit=2"
-            r = requests.get(url, timeout=10)
+            oi_url = f"https://www.okx.com/api/v5/public/open-interest?instType=SWAP&instId={okx_symbol}"
+            r = requests.get(oi_url, timeout=10)
             data = r.json()
             
-            if data.get("code") == "0" and data.get("data") and len(data["data"]) >= 2:
-                sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-                old_close = float(sorted_data[-2][4])
-                new_close = float(sorted_data[-1][4])
-                results[symbol] = {"old": old_close, "new": new_close}
+            current_oi = 0
+            if data.get("code") == "0" and data.get("data"):
+                current_oi = float(data["data"][0].get("oiCcy", 0))
+            
+            price_url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar=1H&limit=2"
+            r2 = requests.get(price_url, timeout=10)
+            data2 = r2.json()
+            
+            if data2.get("code") == "0" and data2.get("data") and len(data2["data"]) >= 2:
+                sorted_candles = sorted(data2["data"], key=lambda x: int(x[0]))
+                old_price = float(sorted_candles[-2][4])
+                new_price = float(sorted_candles[-1][4])
+                
+                if current_oi > 0 and old_price > 0:
+                    results[symbol] = {
+                        "oi": current_oi,
+                        "old_price": old_price,
+                        "new_price": new_price,
+                        "price_change": (new_price - old_price) / old_price * 100
+                    }
         except:
             pass
+    
+    print(f"  Got data for {len(results)} symbols")
     return results
 
 def get_market_caps():
-    url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1"
     try:
+        url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1"
         r = requests.get(url, timeout=15)
         data = r.json()
-        mc_map = {}
-        for coin in data:
-            symbol = coin.get("symbol", "").upper()
-            mc = coin.get("market_cap", 0)
-            if mc:
-                mc_map[symbol] = mc
-        return mc_map
+        return {coin["symbol"].upper(): coin.get("market_cap", 0) for coin in data if coin.get("market_cap")}
     except:
         return {}
 
 def format_number(n):
-    if n >= 1e9:
-        return f"{n/1e9:.2f}B"
-    elif n >= 1e6:
-        return f"{n/1e6:.2f}M"
-    elif n >= 1e3:
-        return f"{n/1e3:.2f}K"
+    if n >= 1e9: return f"{n/1e9:.2f}B"
+    elif n >= 1e6: return f"{n/1e6:.2f}M"
+    elif n >= 1e3: return f"{n/1e3:.2f}K"
     return f"{n:.2f}"
 
-def send_discord_alert(alerts):
-    if not DISCORD_WEBHOOK:
-        print("WARNING: No DISCORD_WEBHOOK_URL set!")
-        return
-    if not alerts:
-        print("No alerts to send")
-        return
-    
-    print(f"Sending {len(alerts)} alerts to Discord...")
-    
+def send_discord_alert(alerts, scanned_count):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M")
     
+    if not DISCORD_WEBHOOK:
+        print("No DISCORD_WEBHOOK")
+        return
+    
+    if not alerts:
+        payload = {"content": f"✅ **OI 掃描完成** | {now}\n掃描 {scanned_count} 個幣種，目前無顯著異動"}
+        try:
+            r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
+            print(f"Status sent: {r.status_code}")
+        except Exception as e:
+            print(f"Error: {e}")
+        return
+    
     embeds = []
     for a in alerts[:5]:
-        if a["oi_change"] > 0 and a["price_change"] > 0:
-            direction = "🟢 多方進場"
-            color = 0x00ff00
-        elif a["oi_change"] > 0 and a["price_change"] < 0:
-            direction = "🔴 空方進場"
-            color = 0xff0000
+        if a["price_change"] > 0:
+            direction, color = "🟢 多方進場", 0x00ff00
         else:
-            direction = "⚪ OI減少"
-            color = 0x808080
+            direction, color = "🔴 空方進場", 0xff0000
         
-        embed = {
+        embeds.append({
             "title": f"🚨 {a['symbol']} OI 異動",
             "color": color,
             "fields": [
-                {"name": "📊 1H OI變動", "value": f"{a['oi_change']:+.2f}%", "inline": True},
-                {"name": "💰 1H價格變動", "value": f"{a['price_change']:+.2f}%", "inline": True},
-                {"name": "📈 24H變動", "value": f"{a['change_24h']:+.2f}%", "inline": True},
-                {"name": "🎯 現價", "value": f"${a['price']:.6g}", "inline": True},
-                {"name": "📦 OI金額", "value": f"${format_number(a['oi_value'])}", "inline": True},
-                {"name": "⚖️ OI/市值", "value": f"{a['oi_mc_ratio']:.1f}%" if a['oi_mc_ratio'] else "N/A", "inline": True},
+                {"name": "💰 現價", "value": f"${a['new_price']:,.4f}", "inline": True},
+                {"name": "📈 1H價格", "value": f"{a['price_change']:+.2f}%", "inline": True},
+                {"name": "📦 OI", "value": f"{format_number(a['oi'])}", "inline": True},
             ],
-            "footer": {"text": f"{direction} | 交易量排名 Top 100"}
-        }
-        embeds.append(embed)
+            "footer": {"text": f"{direction} | {now}"}
+        })
     
-    payload = {
-        "content": f"**🔍 OI 異動掃描 | {now}**\n偵測到 {len(alerts)} 個訊號（掃描前100大交易量幣種）：",
-        "embeds": embeds
-    }
+    payload = {"content": f"**🔍 OI 異動掃描 | {now}**\n偵測到 {len(alerts)} 個訊號：", "embeds": embeds}
     
     try:
         r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
-        print(f"Discord: {r.status_code}")
+        print(f"Alert sent: {r.status_code}")
     except Exception as e:
         print(f"Discord error: {e}")
 
 def main():
     print("=== OI Scanner Start ===")
     
-    print("Getting top 100 symbols by volume...")
     tickers = get_all_tickers()
-    
     if not tickers:
-        print("ERROR: Failed to get tickers from Binance")
+        print("❌ No tickers")
         return
     
-    print(f"Got {len(tickers)} tickers")
-    usdt_tickers = [t for t in tickers if isinstance(t, dict) and t.get("symbol", "").endswith("USDT")]
-    usdt_tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
-    top_symbols = usdt_tickers[:100]
+    tickers.sort(key=lambda x: x.get("quoteVolume", 0), reverse=True)
+    top_symbols = [t["symbol"] for t in tickers[:50]]
+    ticker_map = {t["symbol"]: t for t in tickers}
     
-    ticker_map = {t["symbol"]: t for t in top_symbols}
-    symbols = [t["symbol"] for t in top_symbols]
-    print(f"Scanning {len(symbols)} symbols")
+    print(f"Top symbols: {top_symbols[:5]}...")
     
-    print("Getting market caps...")
+    data = get_oi_and_price_data(top_symbols)
     market_caps = get_market_caps()
     
-    print("Getting OI history...")
-    oi_data = get_oi_history_batch(symbols)
-    
-    print("Getting price history...")
-    price_data = get_price_history_batch(symbols)
-    
     alerts = []
-    
-    for symbol in symbols:
-        if symbol not in oi_data or symbol not in price_data:
-            continue
-        
-        oi = oi_data[symbol]
-        price = price_data[symbol]
-        ticker = ticker_map[symbol]
-        
-        if oi["old"] == 0 or price["old"] == 0:
-            continue
-        
-        oi_change = ((oi["new"] - oi["old"]) / oi["old"]) * 100
-        price_change = ((price["new"] - price["old"]) / price["old"]) * 100
-        
-        base = symbol.replace("USDT", "")
-        mc = market_caps.get(base, 0)
-        oi_mc_ratio = (oi["new"] / mc * 100) if mc > 0 else 0
+    for symbol, d in data.items():
+        price_change = d["price_change"]
         
         is_alert = False
-        
-        if abs(oi_change) >= 5 and abs(price_change) >= 3:
+        if abs(price_change) >= 3:
             is_alert = True
-        
-        if abs(oi_change) >= 5 and oi_mc_ratio >= 10:
-            is_alert = True
-        
-        if abs(oi_change) >= 7:
+        if abs(price_change) >= 5:
             is_alert = True
         
         if is_alert:
             alerts.append({
                 "symbol": symbol,
-                "oi_change": oi_change,
+                "oi": d["oi"],
+                "old_price": d["old_price"],
+                "new_price": d["new_price"],
                 "price_change": price_change,
-                "change_24h": float(ticker.get("priceChangePercent", 0)),
-                "price": float(ticker.get("lastPrice", 0)),
-                "oi_value": oi["new"],
-                "oi_mc_ratio": oi_mc_ratio,
+                "change_24h": ticker_map.get(symbol, {}).get("priceChangePercent", 0)
             })
-            print(f"🚨 {symbol}: OI {oi_change:+.1f}% | Price {price_change:+.1f}% | OI/MC {oi_mc_ratio:.1f}%")
+            print(f"🚨 {symbol}: Price {price_change:+.1f}%")
     
+    alerts.sort(key=lambda x: abs(x["price_change"]), reverse=True)
     print(f"\nFound {len(alerts)} alerts")
-    
-    if alerts:
-        alerts.sort(key=lambda x: abs(x["oi_change"]), reverse=True)
-        send_discord_alert(alerts)
-    else:
-        print("No significant OI movements detected")
-        if DISCORD_WEBHOOK:
-            tw_tz = timezone(timedelta(hours=8))
-            now = datetime.now(tw_tz).strftime("%H:%M")
-            payload = {
-                "content": f"✅ **OI 掃描完成** | {now}\n掃描 {len(symbols)} 個幣種，目前無顯著異動"
-            }
-            try:
-                r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
-                print(f"Status sent: {r.status_code}")
-            except Exception as e:
-                print(f"Status error: {e}")
+    send_discord_alert(alerts, len(data))
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        print(f"ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+    main()

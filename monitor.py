@@ -8,44 +8,49 @@ SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
 def get_klines(symbol, interval="1h", limit=100):
     base = symbol.replace("USDT", "")
-    okx_interval = "1H" if interval == "1h" else "15m"
-    okx_symbol = f"{base}-USDT-SWAP"
+    klines = []
     
-    url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={okx_interval}&limit={limit}"
-    
+    print(f"    [1] Trying OKX...")
     try:
+        okx_interval = "1H" if interval == "1h" else "15m"
+        okx_symbol = f"{base}-USDT-SWAP"
+        url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={okx_interval}&limit={limit}"
         r = requests.get(url, timeout=15)
         data = r.json()
-        
         if data.get("code") == "0" and data.get("data"):
-            raw = data["data"]
-            klines = []
-            for k in reversed(raw):
-                klines.append([
-                    int(k[0]),
-                    float(k[1]),
-                    float(k[2]),
-                    float(k[3]),
-                    float(k[4]),
-                    float(k[5])
-                ])
-            print(f"    OKX returned {len(klines)} candles")
+            for k in reversed(data["data"]):
+                klines.append([int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), float(k[5])])
+            print(f"    ✓ OKX: {len(klines)} candles")
             return klines
-        else:
-            print(f"    OKX error: {data.get('msg', 'Unknown')}")
+        print(f"    ✗ OKX error: {data.get('msg', data.get('code'))}")
     except Exception as e:
-        print(f"    OKX exception: {e}")
+        print(f"    ✗ OKX exception: {e}")
     
-    print("    Trying Binance spot as fallback...")
+    print(f"    [2] Trying Binance Spot...")
     try:
-        spot_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        r = requests.get(spot_url, timeout=15)
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=15)
         data = r.json()
         if isinstance(data, list) and len(data) > 0:
-            print(f"    Binance spot returned {len(data)} candles")
+            print(f"    ✓ Binance Spot: {len(data)} candles")
             return data
+        print(f"    ✗ Binance Spot: empty or error")
     except Exception as e:
-        print(f"    Binance spot error: {e}")
+        print(f"    ✗ Binance Spot exception: {e}")
+    
+    print(f"    [3] Trying CoinGecko...")
+    try:
+        cg_id = "bitcoin" if base == "BTC" else "ethereum" if base == "ETH" else base.lower()
+        url = f"https://api.coingecko.com/api/v3/coins/{cg_id}/ohlc?vs_currency=usd&days=7"
+        r = requests.get(url, timeout=15)
+        data = r.json()
+        if isinstance(data, list) and len(data) > 0:
+            klines = [[int(k[0]), float(k[1]), float(k[2]), float(k[3]), float(k[4]), 0] for k in data]
+            print(f"    ✓ CoinGecko: {len(klines)} candles")
+            return klines[-limit:]
+        print(f"    ✗ CoinGecko: empty")
+    except Exception as e:
+        print(f"    ✗ CoinGecko exception: {e}")
     
     return []
 
@@ -67,23 +72,14 @@ def calculate_atr(highs, lows, closes, period=14):
         return 0
     tr_list = []
     for i in range(1, len(closes)):
-        tr = max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i-1]),
-            abs(lows[i] - closes[i-1])
-        )
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
         tr_list.append(tr)
     return np.mean(tr_list[-period:])
 
 def find_key_levels(highs, lows, closes, atr):
     if len(closes) < 24:
         return None, None
-    recent_high = max(highs[-24:])
-    recent_low = min(lows[-24:])
-    current = closes[-1]
-    resistance = recent_high
-    support = recent_low
-    return support, resistance
+    return min(lows[-24:]), max(highs[-24:])
 
 def find_order_blocks(klines, swing_length=3):
     if len(klines) < swing_length * 2 + 10:
@@ -93,37 +89,25 @@ def find_order_blocks(klines, swing_length=3):
     highs = [float(k[2]) for k in klines]
     lows = [float(k[3]) for k in klines]
     closes = [float(k[4]) for k in klines]
-    volumes = [float(k[5]) for k in klines]
+    volumes = [float(k[5]) if len(k) > 5 else 1 for k in klines]
     
     obs = []
-    avg_vol = np.mean(volumes[-50:]) if len(volumes) >= 50 else np.mean(volumes)
+    avg_vol = np.mean(volumes[-50:]) if len(volumes) >= 50 else np.mean(volumes) if volumes else 1
     
     for i in range(swing_length, len(closes) - swing_length - 1):
-        is_swing_high = all(highs[i] > highs[i-j] for j in range(1, swing_length+1)) and \
-                        all(highs[i] > highs[i+j] for j in range(1, swing_length+1))
-        is_swing_low = all(lows[i] < lows[i-j] for j in range(1, swing_length+1)) and \
-                       all(lows[i] < lows[i+j] for j in range(1, swing_length+1))
+        is_swing_high = all(highs[i] > highs[i-j] for j in range(1, swing_length+1)) and all(highs[i] > highs[i+j] for j in range(1, swing_length+1))
+        is_swing_low = all(lows[i] < lows[i-j] for j in range(1, swing_length+1)) and all(lows[i] < lows[i+j] for j in range(1, swing_length+1))
         
-        if is_swing_high and volumes[i] > avg_vol * 0.8:
+        if is_swing_high and (avg_vol == 0 or volumes[i] > avg_vol * 0.5):
             for j in range(1, min(5, i+1)):
                 if closes[i-j] > opens[i-j]:
-                    obs.append({
-                        "type": "bearish",
-                        "top": highs[i-j],
-                        "bottom": lows[i-j],
-                        "index": i-j
-                    })
+                    obs.append({"type": "bearish", "top": highs[i-j], "bottom": lows[i-j], "index": i-j})
                     break
         
-        if is_swing_low and volumes[i] > avg_vol * 0.8:
+        if is_swing_low and (avg_vol == 0 or volumes[i] > avg_vol * 0.5):
             for j in range(1, min(5, i+1)):
                 if closes[i-j] < opens[i-j]:
-                    obs.append({
-                        "type": "bullish",
-                        "top": highs[i-j],
-                        "bottom": lows[i-j],
-                        "index": i-j
-                    })
+                    obs.append({"type": "bullish", "top": highs[i-j], "bottom": lows[i-j], "index": i-j})
                     break
     
     return obs[-5:] if obs else []
@@ -131,18 +115,14 @@ def find_order_blocks(klines, swing_length=3):
 def analyze_symbol(symbol):
     print(f"  Fetching 1H klines...")
     klines_1h = get_klines(symbol, "1h", 100)
-    print(f"  Got {len(klines_1h)} 1H candles")
+    
+    if not klines_1h:
+        print(f"  ❌ No 1H data")
+        return None
     
     print(f"  Fetching 15M klines...")
     klines_15m = get_klines(symbol, "15m", 100)
-    print(f"  Got {len(klines_15m)} 15M candles")
-    
-    if not klines_1h:
-        print(f"  ERROR: No 1H data for {symbol}")
-        return None
-    
     if not klines_15m:
-        print(f"  WARNING: No 15M data, using 1H only")
         klines_15m = klines_1h
     
     closes_1h = [float(k[4]) for k in klines_1h]
@@ -160,43 +140,33 @@ def analyze_symbol(symbol):
     support, resistance = find_key_levels(highs_1h, lows_1h, closes_1h, atr)
     
     obs_1h = find_order_blocks(klines_1h)
-    obs_15m = find_order_blocks(klines_15m)
     
     nearby_obs = []
-    for ob in obs_1h + obs_15m:
+    for ob in obs_1h:
         distance = abs(current_price - (ob["top"] + ob["bottom"]) / 2) / current_price * 100
-        if distance < 3:
+        if distance < 5:
             ob["distance"] = distance
             nearby_obs.append(ob)
     
     return {
-        "symbol": symbol,
-        "price": current_price,
-        "change_1h": price_change_1h,
-        "change_24h": price_change_24h,
-        "rsi_1h": rsi_1h,
-        "rsi_15m": rsi_15m,
-        "support": support,
-        "resistance": resistance,
-        "atr": atr,
-        "order_blocks": nearby_obs[:3]
+        "symbol": symbol, "price": current_price, "change_1h": price_change_1h,
+        "change_24h": price_change_24h, "rsi_1h": rsi_1h, "rsi_15m": rsi_15m,
+        "support": support, "resistance": resistance, "atr": atr, "order_blocks": nearby_obs[:3]
     }
 
 def get_rsi_status(rsi):
-    if rsi >= 70:
-        return "🔴 超買", 0xff0000
-    elif rsi <= 30:
-        return "🟢 超賣", 0x00ff00
-    elif rsi >= 60:
-        return "🟡 偏多", 0xffaa00
-    elif rsi <= 40:
-        return "🟡 偏空", 0xffaa00
-    else:
-        return "⚪ 中性", 0x808080
+    if rsi >= 70: return "🔴 超買", 0xff0000
+    elif rsi <= 30: return "🟢 超賣", 0x00ff00
+    elif rsi >= 60: return "🟡 偏多", 0xffaa00
+    elif rsi <= 40: return "🟡 偏空", 0xffaa00
+    else: return "⚪ 中性", 0x808080
 
 def send_discord(analyses):
-    if not DISCORD_WEBHOOK or not analyses:
-        print("No webhook or no data")
+    if not DISCORD_WEBHOOK:
+        print("No DISCORD_WEBHOOK set")
+        return
+    if not analyses:
+        print("No analyses to send")
         return
     
     tw_tz = timezone(timedelta(hours=8))
@@ -222,59 +192,37 @@ def send_discord(analyses):
             fields.append({"name": "🔴 阻力", "value": f"${a['resistance']:,.2f} ({resist_dist:.1f}%)", "inline": True})
         
         if a["order_blocks"]:
-            ob_text = ""
-            for ob in a["order_blocks"]:
-                ob_type = "🟢多方" if ob["type"] == "bullish" else "🔴空方"
-                ob_text += f"{ob_type} ${ob['bottom']:,.0f}-${ob['top']:,.0f}\n"
-            fields.append({"name": "📦 附近OB", "value": ob_text or "無", "inline": False})
+            ob_text = "\n".join([f"{'🟢多方' if ob['type']=='bullish' else '🔴空方'} ${ob['bottom']:,.0f}-${ob['top']:,.0f}" for ob in a["order_blocks"]])
+            fields.append({"name": "📦 附近OB", "value": ob_text, "inline": False})
         
-        embed = {
-            "title": f"📊 {a['symbol']} 技術分析",
-            "color": color,
-            "fields": fields,
-            "footer": {"text": f"更新時間: {now}"}
-        }
-        embeds.append(embed)
+        embeds.append({"title": f"📊 {a['symbol']} 技術分析", "color": color, "fields": fields, "footer": {"text": f"更新: {now}"}})
     
-    payload = {
-        "content": f"**📈 技術分析報告 | {now}**",
-        "embeds": embeds
-    }
+    payload = {"content": f"**📈 技術分析報告 | {now}**", "embeds": embeds}
     
     try:
         r = requests.post(DISCORD_WEBHOOK, json=payload, timeout=10)
-        print(f"Discord: {r.status_code}")
+        print(f"Discord response: {r.status_code}")
+        if r.status_code != 200:
+            print(f"Discord body: {r.text[:200]}")
     except Exception as e:
         print(f"Discord error: {e}")
 
 def main():
     print("=== Crypto Monitor Start ===")
-    print(f"Analyzing {SYMBOLS}...")
     
     analyses = []
     for symbol in SYMBOLS:
-        print(f"\nAnalyzing {symbol}...")
+        print(f"\n[{symbol}]")
         try:
             result = analyze_symbol(symbol)
             if result:
                 analyses.append(result)
-                print(f"  ✅ Price: ${result['price']:,.2f}")
-                print(f"  ✅ RSI(1H): {result['rsi_1h']:.1f}")
-                print(f"  ✅ OBs nearby: {len(result['order_blocks'])}")
-            else:
-                print(f"  ❌ No result for {symbol}")
+                print(f"  ✅ ${result['price']:,.2f} | RSI: {result['rsi_1h']:.1f} | OB: {len(result['order_blocks'])}")
         except Exception as e:
-            print(f"  ❌ Error analyzing {symbol}: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  ❌ Error: {e}")
     
-    print(f"\nTotal analyses: {len(analyses)}")
-    
-    if analyses:
-        send_discord(analyses)
-        print("✅ Sent to Discord")
-    else:
-        print("❌ No data to send")
+    print(f"\n=== Results: {len(analyses)}/{len(SYMBOLS)} ===")
+    send_discord(analyses)
 
 if __name__ == "__main__":
     main()
