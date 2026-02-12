@@ -184,7 +184,7 @@ def filter_new_or_consistent(alerts):
             prev_signal = prev.get("signal")
             prev_time = datetime.fromisoformat(prev.get("ts", "2000-01-01T00:00:00"))
             
-            if (now - prev_time).total_seconds() > 3600:
+            if (now - prev_time).total_seconds() > 1800:
                 if signal == prev_signal:
                     filtered.append(a)
                     new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
