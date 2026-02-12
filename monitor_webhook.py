@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-加密貨幣監控 - Discord Webhook 版本（零 Token 消耗）
-"""
 
 import requests
 import json
@@ -9,14 +6,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-# GitHub Actions 無狀態，每次都是新環境
 STATE_FILE = Path("/tmp/monitor_state.json")
-
-# ========== Discord Webhook ==========
-# 請在 Discord 頻道設定 > 整合 > Webhook 建立一個，然後貼上 URL
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
-# ========== 監控設定 ==========
 ALERTS = {
     "BTC": {
         "danger_levels": [59800, 52000],
@@ -30,14 +22,13 @@ ALERTS = {
     }
 }
 
-OI_CHANGE_THRESHOLD = 0.015      # 1.5% OI 變動
-PRICE_CHANGE_THRESHOLD = 0.01    # 1% 價格波動
-RSI_OVERSOLD = 30                # RSI 超賣
-RSI_OVERBOUGHT = 70              # RSI 超買
-RSI_PERIOD = 14                  # RSI 週期
+OI_CHANGE_THRESHOLD = 0.015
+PRICE_CHANGE_THRESHOLD = 0.01
+RSI_OVERSOLD = 30
+RSI_OVERBOUGHT = 70
+RSI_PERIOD = 14
 
 def get_binance_price(symbol):
-    # 1. Bybit API
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -55,7 +46,6 @@ def get_binance_price(symbol):
     except:
         pass
     
-    # 2. OKX API
     try:
         r = requests.get(
             "https://www.okx.com/api/v5/market/ticker",
@@ -76,7 +66,6 @@ def get_binance_price(symbol):
     except:
         pass
     
-    # 3. CoinGecko API
     try:
         coin_id = "bitcoin" if symbol == "BTC" else "ethereum" if symbol == "ETH" else symbol.lower()
         r = requests.get(
@@ -97,7 +86,6 @@ def get_binance_price(symbol):
     return None
 
 def get_binance_oi(symbol):
-    # 1. Bybit API
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -111,7 +99,6 @@ def get_binance_oi(symbol):
     except:
         pass
     
-    # 2. OKX API
     try:
         r = requests.get(
             "https://www.okx.com/api/v5/public/open-interest",
@@ -127,8 +114,6 @@ def get_binance_oi(symbol):
     return None
 
 def get_klines_for_rsi(symbol, interval="1h", limit=50):
-    """取得 K 線數據用於計算 RSI"""
-    # 1. Bybit
     try:
         interval_map = {"15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D"}
         r = requests.get(
@@ -148,7 +133,6 @@ def get_klines_for_rsi(symbol, interval="1h", limit=50):
     except:
         pass
     
-    # 2. OKX
     try:
         interval_map = {"15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D"}
         r = requests.get(
@@ -170,7 +154,6 @@ def get_klines_for_rsi(symbol, interval="1h", limit=50):
     return []
 
 def calculate_rsi(closes, period=14):
-    """計算 RSI"""
     if len(closes) < period + 1:
         return None
     
@@ -191,7 +174,6 @@ def calculate_rsi(closes, period=14):
     return round(100 - (100 / (1 + rs)), 2)
 
 def get_rsi(symbol, interval="1h"):
-    """取得 RSI 值"""
     closes = get_klines_for_rsi(symbol, interval, 50)
     if closes:
         return calculate_rsi(closes, RSI_PERIOD)
@@ -216,7 +198,7 @@ def send_discord_alert(message):
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={
             "content": message,
-            "username": "🔔 加密貨幣監控"
+            "username": "🔔 Monitor"
         }, timeout=10)
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -236,55 +218,48 @@ def run_monitor():
         config = ALERTS.get(symbol, {})
         triggered = state.get("triggered_alerts", [])
         
-        # 危險線
         for level in config.get("danger_levels", []):
             key = f"{symbol}_danger_{level}"
             if price <= level and key not in triggered:
-                alerts.append(f"🚨 **{symbol} 跌破危險線 ${level:,}！** 當前 ${price:,.2f}")
+                alerts.append(f"🚨 **{symbol} ${level:,}** ${price:,.2f}")
                 triggered.append(key)
         
-        # 壓力位
         for level in config.get("resistance_levels", []):
             key = f"{symbol}_res_{level}"
             if abs(price - level) / level < 0.01 and key not in triggered:
-                alerts.append(f"📈 {symbol} 接近壓力位 ${level:,}（當前 ${price:,.2f}）")
+                alerts.append(f"📈 {symbol} R ${level:,} (${price:,.2f})")
                 triggered.append(key)
         
-        # 支撐位
         for level in config.get("support_levels", []):
             key = f"{symbol}_sup_{level}"
             if abs(price - level) / level < 0.01 and key not in triggered:
-                alerts.append(f"📉 {symbol} 接近支撐位 ${level:,}（當前 ${price:,.2f}）")
+                alerts.append(f"📉 {symbol} S ${level:,} (${price:,.2f})")
                 triggered.append(key)
         
-        # OI 變動
         last_oi = state.get("last_oi", {}).get(symbol)
         if last_oi and current_oi:
             oi_change = (current_oi - last_oi) / last_oi
             if abs(oi_change) >= OI_CHANGE_THRESHOLD:
-                direction = "📈 增加" if oi_change > 0 else "📉 減少"
+                direction = "📈" if oi_change > 0 else "📉"
                 alerts.append(f"📊 {symbol} OI {direction} {abs(oi_change)*100:.1f}%")
         
-        # RSI 監控 (15m, 30m, 1h, 4h)
         for tf in ["15m", "30m", "1h", "4h"]:
             rsi = get_rsi(symbol, tf)
             if rsi:
                 if rsi <= RSI_OVERSOLD and f"{symbol}_oversold_{tf}" not in triggered:
-                    alerts.append(f"🔴 {symbol} {tf} RSI 超賣！RSI={rsi} (<{RSI_OVERSOLD})")
+                    alerts.append(f"🔴 {symbol} {tf} RSI={rsi}")
                     triggered.append(f"{symbol}_oversold_{tf}")
                 elif rsi >= RSI_OVERBOUGHT and f"{symbol}_overbought_{tf}" not in triggered:
-                    alerts.append(f"🟢 {symbol} {tf} RSI 超買！RSI={rsi} (>{RSI_OVERBOUGHT})")
+                    alerts.append(f"🟢 {symbol} {tf} RSI={rsi}")
                     triggered.append(f"{symbol}_overbought_{tf}")
         
-        # 價格波動
         last_price = state.get("last_prices", {}).get(symbol)
         if last_price:
             price_change = (price - last_price) / last_price
             if abs(price_change) >= PRICE_CHANGE_THRESHOLD:
-                direction = "🚀 上漲" if price_change > 0 else "💥 下跌"
-                alerts.append(f"⚡ {symbol} 快速{direction} {abs(price_change)*100:.1f}%！(${last_price:,.0f} → ${price:,.0f})")
+                direction = "🚀" if price_change > 0 else "💥"
+                alerts.append(f"⚡ {symbol} {direction} {abs(price_change)*100:.1f}% (${last_price:,.0f}→${price:,.0f})")
         
-        # 更新狀態
         state.setdefault("last_prices", {})[symbol] = price
         if current_oi:
             state.setdefault("last_oi", {})[symbol] = current_oi
@@ -293,15 +268,14 @@ def run_monitor():
     save_state(state)
     
     if alerts:
-        msg = "🔔 **加密貨幣監控警報**\n\n" + "\n".join(alerts) + f"\n\n⏰ {datetime.now().strftime('%H:%M:%S')}"
+        msg = "🔔 **Alert**\n\n" + "\n".join(alerts) + f"\n\n⏰ {datetime.now().strftime('%H:%M:%S')}"
         send_discord_alert(msg)
         print(msg)
     else:
-        print("✅ 無警報")
+        print("OK")
 
 if __name__ == "__main__":
     alerts = run_monitor()
-    # 每次執行都發送狀態（測試用，之後可移除）
     if not alerts:
         import requests as req
         webhook = os.environ.get("DISCORD_WEBHOOK_URL", "")
@@ -313,7 +287,6 @@ if __name__ == "__main__":
             btc_src = btc.get('source', '?') if btc else '?'
             eth_src = eth.get('source', '?') if eth else '?'
             
-            # 取得 RSI (15m, 30m, 1h, 4h)
             def rsi_emoji(rsi):
                 if rsi is None or rsi == 0: return "❓"
                 if rsi <= 30: return "🔴"
@@ -326,11 +299,11 @@ if __name__ == "__main__":
                     rsis[tf] = get_rsi(symbol, tf) or 0
                 return f"  15m:{rsi_emoji(rsis['15m'])}{rsis['15m']} | 30m:{rsi_emoji(rsis['30m'])}{rsis['30m']} | 1H:{rsi_emoji(rsis['1h'])}{rsis['1h']} | 4H:{rsi_emoji(rsis['4h'])}{rsis['4h']}"
             
-            msg = f"✅ **監控執行成功** (via {btc_src})\n\n"
+            msg = f"✅ **OK** ({btc_src})\n\n"
             msg += f"**BTC** ${btc_price:,.2f}\n"
             msg += get_rsi_line("BTC") + "\n\n"
             msg += f"**ETH** ${eth_price:,.2f}\n"
             msg += get_rsi_line("ETH") + "\n\n"
-            msg += f"🔴<30超賣 | ⚪中性 | 🟢>70超買\n"
+            msg += f"🔴<30 | ⚪- | 🟢>70\n"
             msg += f"⏰ {datetime.now().strftime('%H:%M:%S UTC')}"
-            req.post(webhook, json={"content": msg, "username": "🔔 監控系統"}, timeout=10)
+            req.post(webhook, json={"content": msg, "username": "🔔 Monitor"}, timeout=10)

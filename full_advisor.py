@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-完整補倉顧問 - 三個倉位版本
-"""
 
 import requests
 import json
@@ -12,57 +9,52 @@ from pathlib import Path
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = Path(__file__).parent / "full_advisor_state.json"
 
-# ========== 北鼻的三個倉位 ==========
 POSITIONS = [
     {
         "id": "BTC_COIN",
-        "name": "BTC 幣本位",
+        "name": "BTC-C",
         "symbol": "BTC",
         "entry": 75225,
         "size": 0.9046,
         "liq_price": 40336,
         "leverage": 2.2,
-        # 補倉建議價位（分批）
         "add_levels": [
-            {"price": 63000, "amount": 0.3, "note": "第一批"},
-            {"price": 59800, "amount": 0.3, "note": "第二批"},
-            {"price": 57000, "amount": 0.3, "note": "第三批"},
+            {"price": 63000, "amount": 0.3, "note": "L1"},
+            {"price": 59800, "amount": 0.3, "note": "L2"},
+            {"price": 57000, "amount": 0.3, "note": "L3"},
         ]
     },
     {
         "id": "BTC_USDT",
-        "name": "BTC U本位",
+        "name": "BTC-U",
         "symbol": "BTC",
         "entry": 86265,
         "size": 1.109,
         "liq_price": 45667,
         "leverage": 2.1,
-        # U本位成本太高，建議減倉而非補倉
-        "strategy": "reduce",  # 減倉策略
+        "strategy": "reduce",
         "reduce_levels": [
-            {"price": 72000, "percent": 30, "note": "反彈減倉"},
-            {"price": 76000, "percent": 30, "note": "接近成本減倉"},
-            {"price": 80000, "percent": 40, "note": "回本附近清倉"},
+            {"price": 72000, "percent": 30, "note": "L1"},
+            {"price": 76000, "percent": 30, "note": "L2"},
+            {"price": 80000, "percent": 40, "note": "L3"},
         ]
     },
     {
         "id": "ETH_COIN",
-        "name": "ETH 幣本位",
+        "name": "ETH-C",
         "symbol": "ETH",
         "entry": 2253.98,
         "size": 15.45,
         "liq_price": 1234,
         "leverage": 2.2,
-        # 補倉建議價位
         "add_levels": [
-            {"price": 1800, "amount": 5, "note": "第一批"},
-            {"price": 1650, "amount": 5, "note": "第二批"},
-            {"price": 1500, "amount": 5, "note": "第三批"},
+            {"price": 1800, "amount": 5, "note": "L1"},
+            {"price": 1650, "amount": 5, "note": "L2"},
+            {"price": 1500, "amount": 5, "note": "L3"},
         ]
     }
 ]
 
-# ========== 量化門檻 ==========
 THRESHOLDS = {
     "rsi_oversold": 30,
     "rsi_extreme": 25,
@@ -70,10 +62,8 @@ THRESHOLDS = {
     "fear_greed_strong_buy": 10,
     "funding_negative_periods": 3,
     "min_score_to_add": 70,
-    "price_near_level_pct": 3,  # 價格接近目標 3% 就提醒
+    "price_near_level_pct": 3,
 }
-
-# ========== API 函數 ==========
 
 def get_price(symbol):
     try:
@@ -123,16 +113,12 @@ def get_fear_greed():
     except:
         return None
 
-# ========== 分析函數 ==========
-
 def analyze_position(pos, market_data):
-    """分析單一倉位"""
     symbol = pos['symbol']
     price = market_data[symbol]['price']
     entry = pos['entry']
     liq = pos['liq_price']
     
-    # 基本計算
     pnl_pct = (price - entry) / entry * 100
     liq_distance = (price - liq) / price * 100
     recover_pct = (entry - price) / price * 100 if price < entry else 0
@@ -150,14 +136,12 @@ def analyze_position(pos, market_data):
         'actions': []
     }
     
-    # 判斷策略
     if pos.get('strategy') == 'reduce':
-        # 減倉策略（U本位）
         result['strategy'] = 'reduce'
         for level in pos.get('reduce_levels', []):
             target = level['price']
-            if price >= target * 0.97:  # 接近目標 3%
-                result['alerts'].append(f"📈 接近減倉點 ${target:,}！可減 {level['percent']}%")
+            if price >= target * 0.97:
+                result['alerts'].append(f"📈 ${target:,} {level['percent']}%")
                 result['actions'].append({
                     'action': 'reduce',
                     'price': target,
@@ -165,14 +149,13 @@ def analyze_position(pos, market_data):
                     'note': level['note']
                 })
     else:
-        # 補倉策略
         result['strategy'] = 'add'
         for level in pos.get('add_levels', []):
             target = level['price']
             distance_to_target = (price - target) / price * 100
             
             if distance_to_target <= THRESHOLDS['price_near_level_pct']:
-                result['alerts'].append(f"📉 接近補倉點 ${target:,}！可補 {level['amount']} {symbol}")
+                result['alerts'].append(f"📉 ${target:,} {level['amount']} {symbol}")
                 result['actions'].append({
                     'action': 'add',
                     'price': target,
@@ -180,7 +163,6 @@ def analyze_position(pos, market_data):
                     'note': level['note']
                 })
             
-            # 計算補倉後新均價
             if price <= target:
                 new_size = pos['size'] + level['amount']
                 new_entry = (pos['size'] * entry + level['amount'] * price) / new_size
@@ -193,39 +175,35 @@ def analyze_position(pos, market_data):
     return result
 
 def calculate_market_score(market_data):
-    """計算市場整體評分"""
     score = 0
     details = []
     
-    # Fear & Greed
     fg = market_data.get('fear_greed')
     if fg:
         if fg < THRESHOLDS['fear_greed_strong_buy']:
             score += 25
-            details.append(f"✅ 極度恐慌 FGI={fg} +25")
+            details.append(f"✅ FGI={fg} +25")
         elif fg < THRESHOLDS['fear_greed_buy']:
             score += 15
-            details.append(f"✅ 恐慌 FGI={fg} +15")
+            details.append(f"✅ FGI={fg} +15")
         else:
-            details.append(f"❌ 情緒未達恐慌 FGI={fg}")
+            details.append(f"❌ FGI={fg}")
     
-    # RSI
     for symbol in ['BTC', 'ETH']:
         rsi = market_data[symbol].get('rsi')
         if rsi:
             if rsi < THRESHOLDS['rsi_extreme']:
                 score += 15
-                details.append(f"✅ {symbol} RSI 極度超賣 ({rsi}) +15")
+                details.append(f"✅ {symbol} RSI {rsi} +15")
             elif rsi < THRESHOLDS['rsi_oversold']:
                 score += 10
-                details.append(f"✅ {symbol} RSI 超賣 ({rsi}) +10")
+                details.append(f"✅ {symbol} RSI {rsi} +10")
     
-    # 資金費率
     for symbol in ['BTC', 'ETH']:
         funding = market_data[symbol].get('funding')
         if funding and funding['negative_count'] >= THRESHOLDS['funding_negative_periods']:
             score += 10
-            details.append(f"✅ {symbol} 資金費率持續負值 ({funding['negative_count']}/10) +10")
+            details.append(f"✅ {symbol} FR- ({funding['negative_count']}/10) +10")
     
     return score, details
 
@@ -239,10 +217,7 @@ def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-# ========== 主程式 ==========
-
 def run_full_analysis():
-    # 收集市場數據
     market_data = {
         'fear_greed': get_fear_greed(),
         'timestamp': datetime.now().isoformat()
@@ -257,10 +232,8 @@ def run_full_analysis():
             'funding': get_funding(symbol)
         }
     
-    # 計算市場評分
     market_score, score_details = calculate_market_score(market_data)
     
-    # 分析每個倉位
     position_results = []
     for pos in POSITIONS:
         result = analyze_position(pos, market_data)
@@ -276,12 +249,12 @@ def run_full_analysis():
 def format_report(analysis):
     lines = [
         "=" * 50,
-        "📊 **完整倉位分析報告**",
+        "📊 **Report**",
         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 50,
         "",
-        f"**市場情緒評分: {analysis['market_score']}/100**",
-        f"Fear & Greed: {analysis['market']['fear_greed']}",
+        f"**Score: {analysis['market_score']}/100**",
+        f"FGI: {analysis['market']['fear_greed']}",
         "",
     ]
     
@@ -290,46 +263,41 @@ def format_report(analysis):
     
     lines.append("")
     lines.append("=" * 50)
-    lines.append("**📈 你的三個倉位**")
+    lines.append("**Positions**")
     lines.append("=" * 50)
     
     for pos in analysis['positions']:
         lines.append("")
         emoji = "🔴" if pos['pnl_pct'] < -20 else "🟠" if pos['pnl_pct'] < -10 else "🟡" if pos['pnl_pct'] < 0 else "🟢"
         lines.append(f"{emoji} **{pos['name']}**")
-        lines.append(f"   成本: ${pos['entry']:,} | 現價: ${pos['current_price']:,.2f}")
-        lines.append(f"   盈虧: {pos['pnl_pct']:+.2f}% | 回本需漲: {pos['recover_pct']:.1f}%")
-        lines.append(f"   距強平: {pos['liq_distance']:.1f}%")
+        lines.append(f"   E: ${pos['entry']:,} | P: ${pos['current_price']:,.2f}")
+        lines.append(f"   PnL: {pos['pnl_pct']:+.2f}% | Rec: {pos['recover_pct']:.1f}%")
+        lines.append(f"   Liq: {pos['liq_distance']:.1f}%")
         
         if pos['strategy'] == 'reduce':
-            lines.append(f"   📌 策略: **減倉** (成本過高)")
-            lines.append(f"   減倉點位:")
+            lines.append(f"   📌 REDUCE")
             for level in POSITIONS[analysis['positions'].index(pos)].get('reduce_levels', []):
-                status = "⬅️ 當前" if abs(pos['current_price'] - level['price']) / level['price'] < 0.03 else ""
-                lines.append(f"      ${level['price']:,} 減 {level['percent']}% {level['note']} {status}")
+                status = "⬅️" if abs(pos['current_price'] - level['price']) / level['price'] < 0.03 else ""
+                lines.append(f"      ${level['price']:,} {level['percent']}% {status}")
         else:
-            lines.append(f"   📌 策略: **補倉**")
-            lines.append(f"   補倉點位:")
+            lines.append(f"   📌 ADD")
             for level in POSITIONS[analysis['positions'].index(pos)].get('add_levels', []):
-                status = "⬅️ 接近!" if pos['current_price'] <= level['price'] * 1.05 else ""
-                lines.append(f"      ${level['price']:,} 補 {level['amount']} {pos['symbol']} {level['note']} {status}")
+                status = "⬅️" if pos['current_price'] <= level['price'] * 1.05 else ""
+                lines.append(f"      ${level['price']:,} {level['amount']} {pos['symbol']} {status}")
         
         if pos['alerts']:
-            lines.append(f"   ⚠️ 提醒:")
             for alert in pos['alerts']:
-                lines.append(f"      {alert}")
+                lines.append(f"   ⚠️ {alert}")
     
     lines.append("")
     lines.append("=" * 50)
-    lines.append("**💡 總結建議**")
-    lines.append("=" * 50)
     
     if analysis['market_score'] >= 70:
-        lines.append("🟢 市場條件良好，可考慮執行補倉計畫")
+        lines.append("🟢 Good")
     elif analysis['market_score'] >= 50:
-        lines.append("🟡 市場條件一般，保持觀望或小量操作")
+        lines.append("🟡 Wait")
     else:
-        lines.append("🔴 市場條件未達標，建議等待")
+        lines.append("🔴 Hold")
     
     return "\n".join(lines)
 
@@ -337,18 +305,16 @@ def send_webhook(message):
     if not DISCORD_WEBHOOK_URL:
         return
     try:
-        # Discord 有 2000 字元限制，分段發送
         chunks = [message[i:i+1900] for i in range(0, len(message), 1900)]
         for chunk in chunks:
             requests.post(DISCORD_WEBHOOK_URL, json={
                 "content": chunk,
-                "username": "📊 倉位顧問"
+                "username": "📊 Advisor"
             }, timeout=10)
     except Exception as e:
         print(f"Webhook error: {e}")
 
 def check_and_alert(analysis):
-    """檢查是否需要發送警報"""
     state = load_state()
     alerts_to_send = []
     
@@ -359,15 +325,14 @@ def check_and_alert(analysis):
                 alerts_to_send.append(f"**{pos['name']}**: {alert}")
                 state['alerted'].append(alert_key)
     
-    # 市場評分達標警報
     if analysis['market_score'] >= THRESHOLDS['min_score_to_add']:
         score_key = f"score_{analysis['market_score']}"
         if score_key not in state['alerted']:
-            alerts_to_send.append(f"🎯 市場評分達 {analysis['market_score']}，補倉條件改善中！")
+            alerts_to_send.append(f"🎯 Score {analysis['market_score']}")
             state['alerted'].append(score_key)
     
     if alerts_to_send:
-        msg = "🔔 **倉位提醒**\n\n" + "\n".join(alerts_to_send)
+        msg = "🔔 **Alert**\n\n" + "\n".join(alerts_to_send)
         msg += f"\n\n⏰ {datetime.now().strftime('%H:%M')}"
         send_webhook(msg)
     
@@ -379,14 +344,12 @@ def main():
     report = format_report(analysis)
     print(report)
     
-    # 檢查警報
     alerts = check_and_alert(analysis)
     if alerts:
-        print("\n📤 已發送警報:")
+        print("\nSent:")
         for a in alerts:
             print(f"  {a}")
     
-    # 儲存完整報告
     with open(Path(__file__).parent / "full_report.json", "w") as f:
         json.dump(analysis, f, indent=2, default=str)
 
