@@ -58,8 +58,7 @@ def format_message(alerts, scanned):
     
     for a in alerts[:8]:
         direction = "📈" if a["change_1h"] > 0 else "📉"
-        lines.append(f"**{a['symbol'].replace('USDT', '')}** ${a['price']:,.4g}")
-        lines.append(f"   1H: {direction}{a['change_1h']:+.2f}% | 24H: {a['change_24h']:+.1f}% | Vol: {format_number(a['volume'])}")
+        lines.append(f"**{a['symbol'].replace('USDT', '')}** ${a['price']:,.4g} | {direction}{a['change_1h']:+.2f}% | 24H: {a['change_24h']:+.1f}%")
     
     return "\n".join(lines)
 

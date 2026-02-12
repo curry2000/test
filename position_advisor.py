@@ -76,13 +76,9 @@ def format_message(results):
         strategy_text = "補倉" if r["strategy"] == "ADD" else "減倉"
         levels_text = " / ".join([f"${l:,}" for l in r["levels"]])
         
-        lines.append(f"**{r['name']}**")
-        lines.append(f"現價 ${r['price']:,.2f} | 入場 ${r['entry']:,.2f} | {pnl_emoji}{r['pnl_pct']:+.1f}%")
-        lines.append(f"清算 ${r['liq']:,.0f} (距離 {r['liq_distance']:.1f}%) | {r['risk']}")
-        lines.append(f"📋 {strategy_text}點位: {levels_text}")
-        
-        if r["next_level"]:
-            lines.append(f"⏭️ 下一動作: 到 ${r['next_level']:,} 時{strategy_text}")
+        lines.append(f"**{r['name']}** | {pnl_emoji}{r['pnl_pct']:+.1f}% | {r['risk']}")
+        lines.append(f"現價 ${r['price']:,.2f} → 入場 ${r['entry']:,.2f} → 清算 ${r['liq']:,.0f}")
+        lines.append(f"{strategy_text}: {levels_text}")
         
         lines.append("")
     

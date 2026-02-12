@@ -186,19 +186,13 @@ def format_message(analyses):
         res_dist = (a["resistance"] - a["price"]) / a["price"] * 100
         lines.append(f"📍 支撐 ${a['support']:,.0f} ({sup_dist:.1f}%) | 阻力 ${a['resistance']:,.0f} ({res_dist:.1f}%)")
         
-        lines.append("📦 OB:")
-        
         if a["bullish_obs"]:
             for ob in a["bullish_obs"][:2]:
-                lines.append(f"   🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📈做多 {ob['confidence']}%")
-        else:
-            lines.append("   🟢 (無接近的多方OB)")
+                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📈做多 {ob['confidence']}%")
         
         if a["bearish_obs"]:
             for ob in a["bearish_obs"][:2]:
-                lines.append(f"   🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📉做空 {ob['confidence']}%")
-        else:
-            lines.append("   🔴 (無接近的空方OB)")
+                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📉做空 {ob['confidence']}%")
         
         lines.append("")
     
