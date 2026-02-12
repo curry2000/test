@@ -10,65 +10,71 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 print(f"Webhook configured: {bool(DISCORD_WEBHOOK)}")
 
 def get_all_tickers():
-    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    url = "https://www.okx.com/api/v5/market/tickers?instType=SWAP"
     try:
         r = requests.get(url, timeout=15)
         data = r.json()
-        if isinstance(data, list):
-            return data
-        print(f"Binance API error: {data}")
+        if data.get("code") == "0" and data.get("data"):
+            tickers = []
+            for t in data["data"]:
+                if "-USDT-SWAP" in t["instId"]:
+                    symbol = t["instId"].replace("-USDT-SWAP", "USDT")
+                    tickers.append({
+                        "symbol": symbol,
+                        "lastPrice": t["last"],
+                        "priceChangePercent": float(t["last"]) / float(t["open24h"]) * 100 - 100 if float(t["open24h"]) > 0 else 0,
+                        "quoteVolume": float(t["volCcy24h"])
+                    })
+            print(f"OKX returned {len(tickers)} tickers")
+            return tickers
+        print(f"OKX API error: {data.get('msg', 'Unknown')}")
         return []
     except Exception as e:
         print(f"get_all_tickers error: {e}")
         return []
 
-def get_all_oi():
-    url = "https://fapi.binance.com/fapi/v1/openInterest"
-    try:
-        symbols = get_top_symbols()
-        oi_map = {}
-        for symbol in symbols:
-            try:
-                r = requests.get(f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}", timeout=5)
-                data = r.json()
-                oi_map[symbol] = float(data.get("openInterest", 0))
-            except:
-                pass
-        return oi_map
-    except:
-        return {}
-
 def get_top_symbols():
     tickers = get_all_tickers()
-    usdt_tickers = [t for t in tickers if t["symbol"].endswith("USDT")]
-    usdt_tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
-    return [t["symbol"] for t in usdt_tickers[:100]]
+    tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
+    return [t["symbol"] for t in tickers[:100]]
 
 def get_oi_history_batch(symbols, period="1h"):
     results = {}
     for symbol in symbols:
         try:
-            url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period={period}&limit=2"
-            r = requests.get(url, timeout=5)
+            base = symbol.replace("USDT", "")
+            okx_symbol = f"{base}-USDT-SWAP"
+            
+            url = f"https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId={okx_symbol}&period={period}"
+            r = requests.get(url, timeout=10)
             data = r.json()
-            if isinstance(data, list) and len(data) >= 2:
-                old_oi = float(data[0].get("sumOpenInterestValue", 0))
-                new_oi = float(data[-1].get("sumOpenInterestValue", 0))
+            
+            if data.get("code") == "0" and data.get("data") and len(data["data"]) >= 2:
+                sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
+                old_oi = float(sorted_data[-2][1])
+                new_oi = float(sorted_data[-1][1])
                 results[symbol] = {"old": old_oi, "new": new_oi}
-        except:
+        except Exception as e:
             pass
     return results
 
 def get_price_history_batch(symbols, interval="1h"):
     results = {}
+    okx_interval = "1H" if interval == "1h" else "15m"
+    
     for symbol in symbols:
         try:
-            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit=2"
-            r = requests.get(url, timeout=5)
+            base = symbol.replace("USDT", "")
+            okx_symbol = f"{base}-USDT-SWAP"
+            
+            url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={okx_interval}&limit=2"
+            r = requests.get(url, timeout=10)
             data = r.json()
-            if len(data) >= 2:
-                old_close = float(data[0][4])
-                new_close = float(data[-1][4])
+            
+            if data.get("code") == "0" and data.get("data") and len(data["data"]) >= 2:
+                sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
+                old_close = float(sorted_data[-2][4])
+                new_close = float(sorted_data[-1][4])
                 results[symbol] = {"old": old_close, "new": new_close}
         except:
             pass

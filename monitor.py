@@ -7,27 +7,45 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
 def get_klines(symbol, interval="1h", limit=100):
-    urls = [
-        f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}",
-        f"https://api.bybit.com/v5/market/kline?category=linear&symbol={symbol}&interval={'60' if interval == '1h' else '15'}&limit={limit}"
-    ]
+    base = symbol.replace("USDT", "")
+    okx_interval = "1H" if interval == "1h" else "15m"
+    okx_symbol = f"{base}-USDT-SWAP"
     
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=15)
-            data = r.json()
-            
-            if "fapi.binance" in url:
-                if isinstance(data, list) and len(data) > 0:
-                    return data
-                print(f"    Binance returned: {str(data)[:100]}")
-            else:
-                if data.get("result", {}).get("list"):
-                    raw = data["result"]["list"]
-                    return [[int(k[0]), k[1], k[2], k[3], k[4], k[5]] for k in raw][::-1]
-        except Exception as e:
-            print(f"    Error from {url[:50]}: {e}")
-            continue
+    url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={okx_interval}&limit={limit}"
+    
+    try:
+        r = requests.get(url, timeout=15)
+        data = r.json()
+        
+        if data.get("code") == "0" and data.get("data"):
+            raw = data["data"]
+            klines = []
+            for k in reversed(raw):
+                klines.append([
+                    int(k[0]),
+                    float(k[1]),
+                    float(k[2]),
+                    float(k[3]),
+                    float(k[4]),
+                    float(k[5])
+                ])
+            print(f"    OKX returned {len(klines)} candles")
+            return klines
+        else:
+            print(f"    OKX error: {data.get('msg', 'Unknown')}")
+    except Exception as e:
+        print(f"    OKX exception: {e}")
+    
+    print("    Trying Binance spot as fallback...")
+    try:
+        spot_url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        r = requests.get(spot_url, timeout=15)
+        data = r.json()
+        if isinstance(data, list) and len(data) > 0:
+            print(f"    Binance spot returned {len(data)} candles")
+            return data
+    except Exception as e:
+        print(f"    Binance spot error: {e}")
     
     return []
 

@@ -38,26 +38,32 @@ POSITIONS = [
 ]
 
 def get_price(symbol):
-    urls = [
-        f"https://api.bybit.com/v5/market/tickers?category=linear&symbol={symbol}",
-        f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}",
-        f"https://www.okx.com/api/v5/market/ticker?instId={symbol.replace('USDT', '-USDT-SWAP')}"
-    ]
+    base = symbol.replace("USDT", "")
+    okx_symbol = f"{base}-USDT-SWAP"
     
-    for i, url in enumerate(urls):
-        try:
-            r = requests.get(url, timeout=10)
-            data = r.json()
-            if i == 0:
-                price = float(data["result"]["list"][0]["lastPrice"])
-            elif i == 1:
-                price = float(data["price"])
-            else:
-                price = float(data["data"][0]["last"])
+    url = f"https://www.okx.com/api/v5/market/ticker?instId={okx_symbol}"
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            price = float(data["data"][0]["last"])
             if price > 0:
+                print(f"  OKX {symbol}: ${price:,.2f}")
                 return price
-        except:
-            continue
+    except Exception as e:
+        print(f"  OKX error for {symbol}: {e}")
+    
+    try:
+        spot_url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
+        r = requests.get(spot_url, timeout=10)
+        data = r.json()
+        price = float(data.get("price", 0))
+        if price > 0:
+            print(f"  Binance spot {symbol}: ${price:,.2f}")
+            return price
+    except:
+        pass
+    
     return 0
 
 def analyze_position(pos, current_price):
