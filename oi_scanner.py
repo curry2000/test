@@ -44,7 +44,7 @@ def get_top_symbols():
     usdt_tickers.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
     return [t["symbol"] for t in usdt_tickers[:100]]
 
-def get_oi_history_batch(symbols, period="5m"):
+def get_oi_history_batch(symbols, period="1h"):
     results = {}
     for symbol in symbols:
         try:
@@ -59,7 +59,7 @@ def get_oi_history_batch(symbols, period="5m"):
             pass
     return results
 
-def get_price_history_batch(symbols, interval="5m"):
+def get_price_history_batch(symbols, interval="1h"):
     results = {}
     for symbol in symbols:
         try:
@@ -127,8 +127,8 @@ def send_discord_alert(alerts):
             "title": f"🚨 {a['symbol']} OI 異動",
             "color": color,
             "fields": [
-                {"name": "📊 5M OI變動", "value": f"{a['oi_change']:+.2f}%", "inline": True},
-                {"name": "💰 5M價格變動", "value": f"{a['price_change']:+.2f}%", "inline": True},
+                {"name": "📊 1H OI變動", "value": f"{a['oi_change']:+.2f}%", "inline": True},
+                {"name": "💰 1H價格變動", "value": f"{a['price_change']:+.2f}%", "inline": True},
                 {"name": "📈 24H變動", "value": f"{a['change_24h']:+.2f}%", "inline": True},
                 {"name": "🎯 現價", "value": f"${a['price']:.6g}", "inline": True},
                 {"name": "📦 OI金額", "value": f"${format_number(a['oi_value'])}", "inline": True},
@@ -199,13 +199,13 @@ def main():
         
         is_alert = False
         
-        if abs(oi_change) >= 2 and abs(price_change) >= 1.5:
+        if abs(oi_change) >= 5 and abs(price_change) >= 3:
             is_alert = True
         
-        if abs(oi_change) >= 3 and oi_mc_ratio >= 10:
+        if abs(oi_change) >= 5 and oi_mc_ratio >= 10:
             is_alert = True
         
-        if abs(oi_change) >= 4:
+        if abs(oi_change) >= 7:
             is_alert = True
         
         if is_alert:
