@@ -34,7 +34,7 @@ OI_CHANGE_THRESHOLD = 0.015      # 1.5% OI 變動
 PRICE_CHANGE_THRESHOLD = 0.01    # 1% 價格波動
 
 def get_binance_price(symbol):
-    # 優先：Bybit API
+    # 1. Bybit API
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -46,12 +46,34 @@ def get_binance_price(symbol):
             item = data["result"]["list"][0]
             return {
                 "price": float(item["lastPrice"]),
-                "change_24h": float(item["price24hPcnt"])
+                "change_24h": float(item["price24hPcnt"]),
+                "source": "Bybit"
             }
     except:
         pass
     
-    # 備用：CoinGecko API
+    # 2. OKX API
+    try:
+        r = requests.get(
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": f"{symbol}-USDT-SWAP"},
+            timeout=10
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            item = data["data"][0]
+            open_24h = float(item.get("open24h", item["last"]))
+            last = float(item["last"])
+            change = (last - open_24h) / open_24h if open_24h else 0
+            return {
+                "price": last,
+                "change_24h": change,
+                "source": "OKX"
+            }
+    except:
+        pass
+    
+    # 3. CoinGecko API
     try:
         coin_id = "bitcoin" if symbol == "BTC" else "ethereum" if symbol == "ETH" else symbol.lower()
         r = requests.get(
@@ -63,7 +85,8 @@ def get_binance_price(symbol):
         if coin_id in data:
             return {
                 "price": float(data[coin_id]["usd"]),
-                "change_24h": float(data[coin_id].get("usd_24h_change", 0)) / 100
+                "change_24h": float(data[coin_id].get("usd_24h_change", 0)) / 100,
+                "source": "CoinGecko"
             }
     except:
         pass
@@ -71,7 +94,7 @@ def get_binance_price(symbol):
     return None
 
 def get_binance_oi(symbol):
-    # 優先：Bybit API
+    # 1. Bybit API
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -85,16 +108,16 @@ def get_binance_oi(symbol):
     except:
         pass
     
-    # 備用：Binance
+    # 2. OKX API
     try:
         r = requests.get(
-            "https://fapi.binance.com/fapi/v1/openInterest",
-            params={"symbol": f"{symbol}USDT"},
+            "https://www.okx.com/api/v5/public/open-interest",
+            params={"instId": f"{symbol}-USDT-SWAP"},
             timeout=10
         )
         data = r.json()
-        if "openInterest" in data:
-            return float(data["openInterest"])
+        if data.get("code") == "0" and data.get("data"):
+            return float(data["data"][0].get("oi", 0))
     except:
         pass
     

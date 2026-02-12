@@ -67,30 +67,7 @@ class OrderBlock:
 # ========== API 函數 ==========
 def get_klines(symbol: str, interval: str, limit: int = 200) -> List[Dict]:
     """取得 K 線數據"""
-    # 先試 Binance
-    try:
-        r = requests.get(
-            "https://fapi.binance.com/fapi/v1/klines",
-            params={"symbol": f"{symbol}USDT", "interval": interval, "limit": limit},
-            timeout=15
-        )
-        data = r.json()
-        if isinstance(data, list) and len(data) > 0:
-            klines = []
-            for k in data:
-                klines.append({
-                    "time": datetime.fromtimestamp(int(k[0])/1000).strftime("%Y-%m-%d %H:%M"),
-                    "open": float(k[1]),
-                    "high": float(k[2]),
-                    "low": float(k[3]),
-                    "close": float(k[4]),
-                    "volume": float(k[5])
-                })
-            return klines
-    except Exception as e:
-        print(f"Binance error: {e}")
-    
-    # 備用：Bybit API
+    # 1. Bybit API
     try:
         interval_map = {"15m": "15", "30m": "30", "1h": "60", "4h": "240", "1d": "D"}
         r = requests.get(
@@ -119,11 +96,39 @@ def get_klines(symbol: str, interval: str, limit: int = 200) -> List[Dict]:
     except Exception as e:
         print(f"Bybit error: {e}")
     
+    # 2. OKX API
+    try:
+        interval_map = {"15m": "15m", "30m": "30m", "1h": "1H", "4h": "4H", "1d": "1D"}
+        r = requests.get(
+            "https://www.okx.com/api/v5/market/candles",
+            params={
+                "instId": f"{symbol}-USDT-SWAP",
+                "bar": interval_map.get(interval, "15m"),
+                "limit": str(limit)
+            },
+            timeout=15
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            klines = []
+            for k in reversed(data["data"]):
+                klines.append({
+                    "time": datetime.fromtimestamp(int(k[0])/1000).strftime("%Y-%m-%d %H:%M"),
+                    "open": float(k[1]),
+                    "high": float(k[2]),
+                    "low": float(k[3]),
+                    "close": float(k[4]),
+                    "volume": float(k[5])
+                })
+            return klines
+    except Exception as e:
+        print(f"OKX error: {e}")
+    
     return []
 
 def get_current_price(symbol: str) -> float:
     """取得當前價格"""
-    # 優先：Bybit
+    # 1. Bybit
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -136,7 +141,20 @@ def get_current_price(symbol: str) -> float:
     except:
         pass
     
-    # 備用：CoinGecko
+    # 2. OKX
+    try:
+        r = requests.get(
+            "https://www.okx.com/api/v5/market/ticker",
+            params={"instId": f"{symbol}-USDT-SWAP"},
+            timeout=10
+        )
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            return float(data["data"][0]["last"])
+    except:
+        pass
+    
+    # 3. CoinGecko
     try:
         coin_id = "bitcoin" if symbol == "BTC" else "ethereum" if symbol == "ETH" else symbol.lower()
         r = requests.get(
