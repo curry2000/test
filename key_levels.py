@@ -166,8 +166,8 @@ TYPE_CN = {
     "Swing High": "波段高點",
     "Swing Low": "波段低點",
     "Round": "整數關卡",
-    "ATR 1.5x": "ATR 1.5倍",
-    "ATR 2x": "ATR 2倍",
+    "ATR 1.5x": "ATR區間",
+    "ATR 2x": "ATR區間",
 }
 
 def get_type_cn(t: str) -> str:
@@ -369,20 +369,19 @@ def send_discord_alert(message: str):
     except Exception as e:
         print(f"Webhook error: {e}")
 
-def get_strength_emoji(weight: float) -> str:
+def get_strength_label(weight: float) -> str:
     if weight >= 5:
-        return "⭐⭐⭐"
+        return "強度: 極高"
     elif weight >= 3:
-        return "⭐⭐"
+        return "強度: 高"
     elif weight >= 1.5:
-        return "⭐"
+        return "強度: 中"
     else:
-        return "·"
+        return "強度: 低"
 
 def format_report(results: List[Dict]) -> str:
     lines = [
-        "📍 **關鍵支撐壓力位**",
-        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        "🔔 **關鍵價位分析**",
         ""
     ]
     
@@ -390,33 +389,34 @@ def format_report(results: List[Dict]) -> str:
         symbol = data["symbol"]
         price = data["price"]
         
-        lines.append(f"**{symbol}** ${price:,.2f}")
+        lines.append(f"**{symbol}: ${price:,.2f}**")
         lines.append("")
         
         if data["resistances"]:
-            lines.append("🔴 **壓力位**")
-            for r in data["resistances"][:5]:
+            for r in data["resistances"][:4]:
                 dist = (r["price"] - price) / price * 100
-                emoji = get_strength_emoji(r["weight"])
-                tfs = "/".join(r["tfs"]) if r["tfs"] else "-"
+                tfs = "/".join(r["tfs"]) if r["tfs"] else ""
                 types = "+".join([get_type_cn(t) for t in r["types"][:2]])
-                lines.append(f"{emoji} ${r['price']:,.0f} (+{dist:.1f}%) [{tfs}] {types}")
-            lines.append("")
+                strength = get_strength_label(r["weight"])
+                lines.append(f"📈 壓力位 ${r['price']:,.0f}（{tfs}）")
+                lines.append(f"距離: +{dist:.1f}% | 類型: {types}")
+                lines.append(f"{strength}")
+                lines.append("")
         
         if data["supports"]:
-            lines.append("🟢 **支撐位**")
-            for s in data["supports"][:5]:
+            for s in data["supports"][:4]:
                 dist = (price - s["price"]) / price * 100
-                emoji = get_strength_emoji(s["weight"])
-                tfs = "/".join(s["tfs"]) if s["tfs"] else "-"
+                tfs = "/".join(s["tfs"]) if s["tfs"] else ""
                 types = "+".join([get_type_cn(t) for t in s["types"][:2]])
-                lines.append(f"{emoji} ${s['price']:,.0f} (-{dist:.1f}%) [{tfs}] {types}")
-            lines.append("")
+                strength = get_strength_label(s["weight"])
+                lines.append(f"📉 支撐位 ${s['price']:,.0f}（{tfs}）")
+                lines.append(f"距離: -{dist:.1f}% | 類型: {types}")
+                lines.append(f"{strength}")
+                lines.append("")
         
         lines.append("---")
     
-    lines.append("")
-    lines.append("⭐⭐⭐=多重確認 ⭐⭐=中強度 ⭐=單一")
+    lines.append(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
     
     return "\n".join(lines)
 
@@ -433,7 +433,7 @@ def check_price_alerts(results: List[Dict], state: Dict) -> List[str]:
             if dist <= alert_threshold and r["weight"] >= 2:
                 key = f"{symbol}_res_{r['price']:.0f}"
                 if key not in state["alerted"]:
-                    alerts.append(f"⚠️ {symbol} 接近壓力 ${r['price']:,.0f} ({dist*100:.1f}%)")
+                    alerts.append(f"📈 {symbol} 接近壓力位 ${r['price']:,.0f}（當前 ${price:,.2f}）")
                     state["alerted"].append(key)
         
         for s in data["supports"][:3]:
@@ -441,7 +441,7 @@ def check_price_alerts(results: List[Dict], state: Dict) -> List[str]:
             if dist <= alert_threshold and s["weight"] >= 2:
                 key = f"{symbol}_sup_{s['price']:.0f}"
                 if key not in state["alerted"]:
-                    alerts.append(f"⚠️ {symbol} 接近支撐 ${s['price']:,.0f} ({dist*100:.1f}%)")
+                    alerts.append(f"📉 {symbol} 接近支撐位 ${s['price']:,.0f}（當前 ${price:,.2f}）")
                     state["alerted"].append(key)
     
     return alerts
@@ -462,7 +462,7 @@ def main():
         
         alerts = check_price_alerts(results, state)
         if alerts:
-            alert_msg = "🔔 **接近關鍵價位！**\n\n" + "\n".join(alerts)
+            alert_msg = "🔔 **關鍵價位警報**\n\n" + "\n".join(alerts) + f"\n\n⏰ {datetime.now().strftime('%H:%M:%S')}"
             send_discord_alert(alert_msg)
     
     save_state(state)
