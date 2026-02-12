@@ -160,16 +160,29 @@ def find_obs(klines):
     
     return unique_bull, unique_bear
 
+def send_alert(msg):
+    if WEBHOOK:
+        try:
+            requests.post(WEBHOOK, json={"content": msg, "username": "⚠️ API 警報"}, timeout=10)
+        except:
+            pass
+
 def main():
+    api_errors = []
     lines = ["📊 **OB 訂單塊分析**", ""]
     
     for symbol in ["BTC", "ETH"]:
         price = get_price(symbol)
+        if price == 0:
+            api_errors.append(f"{symbol} 價格 API 全部失敗")
+        
         lines.append(f"**{symbol}** ${price:,.2f}")
         lines.append("")
         
         for tf in ["15m", "30m"]:
             klines = get_klines(symbol, tf)
+            if len(klines) == 0:
+                api_errors.append(f"{symbol} {tf} K線 API 全部失敗")
             bullish, bearish = find_obs(klines)
             
             print(f"{symbol} {tf}: {len(bullish)} bullish, {len(bearish)} bearish")
@@ -211,6 +224,11 @@ def main():
             print(f"Discord: {r.status_code}")
         except Exception as e:
             print(f"Discord error: {e}")
+    
+    if api_errors:
+        error_msg = "⚠️ **API 異常警報**\n\n" + "\n".join(api_errors) + f"\n\n⏰ {datetime.now().strftime('%H:%M')}"
+        print(error_msg)
+        send_alert(error_msg)
     
     print("=== Done ===")
 
