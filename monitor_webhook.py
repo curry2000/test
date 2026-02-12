@@ -34,18 +34,19 @@ OI_CHANGE_THRESHOLD = 0.015      # 1.5% OI 變動
 PRICE_CHANGE_THRESHOLD = 0.01    # 1% 價格波動
 
 def get_binance_price(symbol):
-    # 先試 Binance
+    # 優先：Bybit API
     try:
         r = requests.get(
-            "https://fapi.binance.com/fapi/v1/ticker/24hr",
-            params={"symbol": f"{symbol}USDT"},
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": f"{symbol}USDT"},
             timeout=10
         )
         data = r.json()
-        if "lastPrice" in data:
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            item = data["result"]["list"][0]
             return {
-                "price": float(data["lastPrice"]),
-                "change_24h": float(data["priceChangePercent"]) / 100
+                "price": float(item["lastPrice"]),
+                "change_24h": float(item["price24hPcnt"])
             }
     except:
         pass
@@ -70,6 +71,21 @@ def get_binance_price(symbol):
     return None
 
 def get_binance_oi(symbol):
+    # 優先：Bybit API
+    try:
+        r = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": f"{symbol}USDT"},
+            timeout=10
+        )
+        data = r.json()
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            item = data["result"]["list"][0]
+            return float(item.get("openInterest", 0))
+    except:
+        pass
+    
+    # 備用：Binance
     try:
         r = requests.get(
             "https://fapi.binance.com/fapi/v1/openInterest",
@@ -77,9 +93,12 @@ def get_binance_oi(symbol):
             timeout=10
         )
         data = r.json()
-        return float(data["openInterest"])
+        if "openInterest" in data:
+            return float(data["openInterest"])
     except:
-        return None
+        pass
+    
+    return None
 
 def load_state():
     if STATE_FILE.exists():

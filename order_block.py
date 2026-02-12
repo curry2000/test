@@ -123,16 +123,16 @@ def get_klines(symbol: str, interval: str, limit: int = 200) -> List[Dict]:
 
 def get_current_price(symbol: str) -> float:
     """取得當前價格"""
-    # 先試 Binance
+    # 優先：Bybit
     try:
         r = requests.get(
-            "https://fapi.binance.com/fapi/v1/ticker/price",
-            params={"symbol": f"{symbol}USDT"},
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear", "symbol": f"{symbol}USDT"},
             timeout=10
         )
         data = r.json()
-        if "price" in data:
-            return float(data["price"])
+        if data.get("retCode") == 0 and data.get("result", {}).get("list"):
+            return float(data["result"]["list"][0]["lastPrice"])
     except:
         pass
     
