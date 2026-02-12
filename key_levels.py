@@ -162,6 +162,19 @@ def get_psychological_levels(price: float, symbol: str) -> List[float]:
             levels.append(start + (i * base))
         return [l for l in levels if abs(l - price) / price < 0.15]
 
+TYPE_CN = {
+    "Swing High": "波段高點",
+    "Swing Low": "波段低點",
+    "Round": "整數關卡",
+    "ATR 1.5x": "ATR 1.5倍",
+    "ATR 2x": "ATR 2倍",
+}
+
+def get_type_cn(t: str) -> str:
+    if t.startswith("Fib"):
+        return f"斐波{t.replace('Fib ', '')}"
+    return TYPE_CN.get(t, t)
+
 def analyze_key_levels(symbol: str) -> Dict:
     price = get_current_price(symbol)
     if price == 0:
@@ -351,7 +364,7 @@ def send_discord_alert(message: str):
     try:
         requests.post(DISCORD_WEBHOOK_URL, json={
             "content": message,
-            "username": "📍 Key Levels"
+            "username": "📍 關鍵價位"
         }, timeout=10)
     except Exception as e:
         print(f"Webhook error: {e}")
@@ -368,7 +381,7 @@ def get_strength_emoji(weight: float) -> str:
 
 def format_report(results: List[Dict]) -> str:
     lines = [
-        "📍 **關鍵支撐壓力位 (1H/4H/1D)**",
+        "📍 **關鍵支撐壓力位**",
         f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         ""
     ]
@@ -381,30 +394,29 @@ def format_report(results: List[Dict]) -> str:
         lines.append("")
         
         if data["resistances"]:
-            lines.append("🔴 **Resistance (壓力)**")
+            lines.append("🔴 **壓力位**")
             for r in data["resistances"][:5]:
                 dist = (r["price"] - price) / price * 100
                 emoji = get_strength_emoji(r["weight"])
                 tfs = "/".join(r["tfs"]) if r["tfs"] else "-"
-                types = "+".join(r["types"][:2])
+                types = "+".join([get_type_cn(t) for t in r["types"][:2]])
                 lines.append(f"{emoji} ${r['price']:,.0f} (+{dist:.1f}%) [{tfs}] {types}")
             lines.append("")
         
         if data["supports"]:
-            lines.append("🟢 **Support (支撐)**")
+            lines.append("🟢 **支撐位**")
             for s in data["supports"][:5]:
                 dist = (price - s["price"]) / price * 100
                 emoji = get_strength_emoji(s["weight"])
                 tfs = "/".join(s["tfs"]) if s["tfs"] else "-"
-                types = "+".join(s["types"][:2])
+                types = "+".join([get_type_cn(t) for t in s["types"][:2]])
                 lines.append(f"{emoji} ${s['price']:,.0f} (-{dist:.1f}%) [{tfs}] {types}")
             lines.append("")
         
         lines.append("---")
     
     lines.append("")
-    lines.append("⭐⭐⭐ = 多時框+多指標確認")
-    lines.append("⭐⭐ = 中強度 | ⭐ = 單一確認")
+    lines.append("⭐⭐⭐=多重確認 ⭐⭐=中強度 ⭐=單一")
     
     return "\n".join(lines)
 
@@ -421,7 +433,7 @@ def check_price_alerts(results: List[Dict], state: Dict) -> List[str]:
             if dist <= alert_threshold and r["weight"] >= 2:
                 key = f"{symbol}_res_{r['price']:.0f}"
                 if key not in state["alerted"]:
-                    alerts.append(f"⚠️ {symbol} 接近壓力 ${r['price']:,.0f} (距離 {dist*100:.1f}%)")
+                    alerts.append(f"⚠️ {symbol} 接近壓力 ${r['price']:,.0f} ({dist*100:.1f}%)")
                     state["alerted"].append(key)
         
         for s in data["supports"][:3]:
@@ -429,32 +441,23 @@ def check_price_alerts(results: List[Dict], state: Dict) -> List[str]:
             if dist <= alert_threshold and s["weight"] >= 2:
                 key = f"{symbol}_sup_{s['price']:.0f}"
                 if key not in state["alerted"]:
-                    alerts.append(f"⚠️ {symbol} 接近支撐 ${s['price']:,.0f} (距離 {dist*100:.1f}%)")
+                    alerts.append(f"⚠️ {symbol} 接近支撐 ${s['price']:,.0f} ({dist*100:.1f}%)")
                     state["alerted"].append(key)
     
     return alerts
 
 def main():
-    print("📍 關鍵支撐壓力位分析")
-    print(f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 50)
-    
     state = load_state()
     results = []
     
     for symbol in SYMBOLS:
-        print(f"\n分析 {symbol}...")
         data = analyze_key_levels(symbol)
         if data:
             results.append(data)
-            
-            print(f"  價格: ${data['price']:,.2f}")
-            print(f"  支撐位: {len(data['supports'])} 個")
-            print(f"  壓力位: {len(data['resistances'])} 個")
     
     if results:
         report = format_report(results)
-        print("\n" + report)
+        print(report)
         send_discord_alert(report)
         
         alerts = check_price_alerts(results, state)
@@ -466,8 +469,6 @@ def main():
     
     with open(Path(__file__).parent / "key_levels_report.json", "w") as f:
         json.dump(results, f, indent=2, default=str)
-    
-    print("\n✅ 完成")
 
 if __name__ == "__main__":
     main()
