@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = "oi_state.json"
 SIGNAL_LOG = "signal_log.json"
+NOTIFIED_FILE = "oi_notified.json"
 
 def load_json(filepath):
     try:
@@ -163,6 +164,47 @@ def log_signals(alerts):
     
     save_json(SIGNAL_LOG, logs)
 
+def filter_new_or_consistent(alerts):
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    
+    notified = load_json(NOTIFIED_FILE)
+    if not isinstance(notified, dict):
+        notified = {}
+    
+    filtered = []
+    new_notified = {}
+    
+    for a in alerts:
+        symbol = a["symbol"]
+        signal = a["signal"]
+        
+        if symbol in notified:
+            prev = notified[symbol]
+            prev_signal = prev.get("signal")
+            prev_time = datetime.fromisoformat(prev.get("ts", "2000-01-01T00:00:00"))
+            
+            if (now - prev_time).total_seconds() > 3600:
+                if signal == prev_signal:
+                    filtered.append(a)
+                    new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+                else:
+                    new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+            else:
+                new_notified[symbol] = prev
+        else:
+            filtered.append(a)
+            new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+    
+    for sym, data in notified.items():
+        if sym not in new_notified:
+            prev_time = datetime.fromisoformat(data.get("ts", "2000-01-01T00:00:00"))
+            if (now - prev_time).total_seconds() < 86400:
+                new_notified[sym] = data
+    
+    save_json(NOTIFIED_FILE, new_notified)
+    return filtered
+
 def main():
     print("=== OI Scanner Start ===")
     
@@ -234,22 +276,26 @@ def main():
     
     all_alerts = top_alerts + smallcap_alerts
     log_signals(all_alerts)
-    print(f"已記錄 {len([a for a in all_alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
+    print(f"偵測到 {len(all_alerts)} 個訊號")
     
     top_actionable = [a for a in top_alerts if a["signal"] in ["LONG", "SHORT", "PENDING"]]
-    if top_actionable:
-        msg = format_message(top_actionable, 100, is_smallcap=False)
+    top_filtered = filter_new_or_consistent(top_actionable)
+    if top_filtered:
+        msg = format_message(top_filtered, 100, is_smallcap=False)
         print("\n" + msg)
         send_discord(msg)
     
     smallcap_actionable = [a for a in smallcap_alerts if a["signal"] in ["LONG", "SHORT"]]
-    if smallcap_actionable:
-        msg = format_message(smallcap_actionable, len(current_data) - 100, is_smallcap=True)
+    smallcap_filtered = filter_new_or_consistent(smallcap_actionable)
+    if smallcap_filtered:
+        msg = format_message(smallcap_filtered, len(current_data) - 100, is_smallcap=True)
         print("\n" + msg)
         send_discord(msg)
     
-    if not top_actionable and not smallcap_actionable:
-        print(f"\n掃描 {len(current_data)} 幣種，無明確訊號")
+    print(f"過濾後通知: Top {len(top_filtered)}, Small {len(smallcap_filtered)}")
+    
+    if not top_filtered and not smallcap_filtered:
+        print(f"掃描 {len(current_data)} 幣種，無新訊號或方向已改變")
 
 if __name__ == "__main__":
     main()

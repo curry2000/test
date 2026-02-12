@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = os.path.expanduser("~/.openclaw/oi_state_local.json")
 SIGNAL_LOG = os.path.expanduser("~/.openclaw/oi_signals_local.json")
+NOTIFIED_FILE = os.path.expanduser("~/.openclaw/oi_notified_local.json")
 
 def load_json(filepath):
     try:
@@ -136,6 +137,47 @@ def log_signals(alerts):
     
     save_json(SIGNAL_LOG, logs)
 
+def filter_new_or_consistent(alerts):
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    
+    notified = load_json(NOTIFIED_FILE)
+    if not isinstance(notified, dict):
+        notified = {}
+    
+    filtered = []
+    new_notified = {}
+    
+    for a in alerts:
+        symbol = a["symbol"]
+        signal = a["signal"]
+        
+        if symbol in notified:
+            prev = notified[symbol]
+            prev_signal = prev.get("signal")
+            prev_time = datetime.fromisoformat(prev.get("ts", "2000-01-01T00:00:00"))
+            
+            if (now - prev_time).total_seconds() > 3600:
+                if signal == prev_signal:
+                    filtered.append(a)
+                    new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+                else:
+                    new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+            else:
+                new_notified[symbol] = prev
+        else:
+            filtered.append(a)
+            new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+    
+    for sym, data in notified.items():
+        if sym not in new_notified:
+            prev_time = datetime.fromisoformat(data.get("ts", "2000-01-01T00:00:00"))
+            if (now - prev_time).total_seconds() < 86400:
+                new_notified[sym] = data
+    
+    save_json(NOTIFIED_FILE, new_notified)
+    return filtered
+
 def main():
     print("=== OI Scanner (Binance Local) ===")
     
@@ -214,14 +256,17 @@ def main():
     alerts.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
     
     log_signals(alerts)
-    print(f"已記錄 {len([a for a in alerts if a['signal'] in ['LONG', 'SHORT']])} 個訊號")
+    print(f"偵測到 {len(alerts)} 個訊號")
     
-    if alerts:
-        message = format_message(alerts, len(tickers))
+    filtered_alerts = filter_new_or_consistent(alerts)
+    print(f"過濾後 {len(filtered_alerts)} 個需通知（新訊號或方向一致）")
+    
+    if filtered_alerts:
+        message = format_message(filtered_alerts, len(tickers))
         print("\n" + message)
         send_discord(message)
     else:
-        print(f"掃描 {len(tickers)} 幣種，無明確訊號")
+        print(f"掃描 {len(tickers)} 幣種，無新訊號或方向已改變")
 
 if __name__ == "__main__":
     main()
