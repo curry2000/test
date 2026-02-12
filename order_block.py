@@ -311,15 +311,10 @@ def merge_nearby_obs(obs: List[OrderBlock], threshold_pct: float = 1.0) -> List[
     return merged
 
 def load_state() -> Dict:
-    if STATE_FILE.exists():
-        with open(STATE_FILE) as f:
-            return json.load(f)
     return {"alerted_obs": [], "last_check": None}
 
 def save_state(state: Dict):
-    state["last_check"] = datetime.now().isoformat()
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    pass
 
 def send_discord_alert(message: str):
     if not DISCORD_WEBHOOK_URL:
