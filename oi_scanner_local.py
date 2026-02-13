@@ -63,6 +63,34 @@ def get_price_change_1h(symbol):
         pass
     return 0
 
+def get_market_cap(symbol):
+    base = symbol.replace("USDT", "").lower()
+    try:
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={base}&vs_currencies=usd&include_market_cap=true"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if base in data and "usd_market_cap" in data[base]:
+            return data[base]["usd_market_cap"]
+    except:
+        pass
+    
+    coin_map = {
+        "btc": "bitcoin", "eth": "ethereum", "sol": "solana", "bnb": "binancecoin",
+        "xrp": "ripple", "doge": "dogecoin", "ada": "cardano", "avax": "avalanche-2",
+        "shib": "shiba-inu", "link": "chainlink", "dot": "polkadot", "matic": "matic-network"
+    }
+    if base in coin_map:
+        try:
+            url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_map[base]}&vs_currencies=usd&include_market_cap=true"
+            r = requests.get(url, timeout=5)
+            data = r.json()
+            cg_id = coin_map[base]
+            if cg_id in data and "usd_market_cap" in data[cg_id]:
+                return data[cg_id]["usd_market_cap"]
+        except:
+            pass
+    return None
+
 def detect_early_momentum(symbol):
     try:
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=13"
@@ -83,7 +111,7 @@ def detect_early_momentum(symbol):
         price_change_5m = (latest_close - prev_close) / prev_close * 100 if prev_close > 0 else 0
         vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 0
         
-        if abs(price_change_5m) >= 2 and vol_ratio >= 3:
+        if abs(price_change_5m) >= 1.5 and vol_ratio >= 2.5:
             return {
                 "price_change_5m": price_change_5m,
                 "vol_ratio": vol_ratio,
@@ -137,7 +165,12 @@ def format_message(alerts, scanned):
             oi_dir = "📈" if a.get("oi_change", 0) > 0 else "📉"
             price_dir = "📈" if a.get("price_change_1h", 0) > 0 else "📉"
             if a.get("oi_change"):
-                lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a.get('oi', 0))})")
+                oi_line = f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a.get('oi', 0))})"
+                mc = get_market_cap(a['symbol'] + "USDT")
+                if mc and mc > 0:
+                    oi_mc_ratio = a.get('oi', 0) / mc * 100
+                    oi_line += f" | OI/MC: {oi_mc_ratio:.1f}%"
+                lines.append(oi_line)
             lines.append(f"• 價格 1H: {price_dir} {a.get('price_change_1h', 0):+.1f}% | 24H: {a['change_24h']:+.1f}%")
         
         reason = "積極信號！" if a.get("aggressive") else ("動能加速！" if a.get("momentum_surge") else a['reason'])
