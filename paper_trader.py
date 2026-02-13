@@ -182,23 +182,38 @@ def check_positions(state):
 
 def get_summary(state):
     closed = state["closed"]
-    if not closed:
-        return None
+    positions = state.get("positions", [])
     
-    wins = len([t for t in closed if t["pnl_pct"] > 0])
-    losses = len([t for t in closed if t["pnl_pct"] <= 0])
-    total_pnl = sum(t["pnl_pct"] for t in closed)
-    total_usd = sum(t["pnl_usd"] for t in closed)
+    wins = [t for t in closed if t["pnl_pct"] > 0]
+    losses = [t for t in closed if t["pnl_pct"] <= 0]
+    total_win_usd = sum(t["pnl_usd"] for t in wins)
+    total_loss_usd = sum(t["pnl_usd"] for t in losses)
+    total_pnl_pct = sum(t["pnl_pct"] for t in closed)
+    total_pnl_usd = sum(t["pnl_usd"] for t in closed)
+    
+    unrealized_pnl = 0
+    for p in positions:
+        current = get_price(p["symbol"])
+        if current:
+            if p["direction"] == "LONG":
+                pnl = (current - p["entry_price"]) / p["entry_price"] * 100
+            else:
+                pnl = (p["entry_price"] - current) / p["entry_price"] * 100
+            unrealized_pnl += p["size"] * pnl / 100
     
     return {
         "total_trades": len(closed),
-        "wins": wins,
-        "losses": losses,
-        "win_rate": wins / len(closed) * 100 if closed else 0,
-        "total_pnl_pct": total_pnl,
-        "total_pnl_usd": total_usd,
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": len(wins) / len(closed) * 100 if closed else 0,
+        "total_pnl_pct": total_pnl_pct,
+        "total_pnl_usd": total_pnl_usd,
+        "total_win_usd": total_win_usd,
+        "total_loss_usd": total_loss_usd,
         "capital": state["capital"],
-        "return_pct": (state["capital"] - CONFIG["capital"]) / CONFIG["capital"] * 100
+        "return_pct": (state["capital"] - CONFIG["capital"]) / CONFIG["capital"] * 100,
+        "open_positions": len(positions),
+        "unrealized_pnl": unrealized_pnl
     }
 
 def format_trade_msg(action, data):
@@ -229,14 +244,26 @@ def format_trade_msg(action, data):
     
     elif action == "SUMMARY":
         s = data
-        return f"""📈 **模擬交易統計**
+        avg_win = s['total_win_usd'] / s['wins'] if s['wins'] > 0 else 0
+        avg_loss = s['total_loss_usd'] / s['losses'] if s['losses'] > 0 else 0
+        profit_factor = abs(s['total_win_usd'] / s['total_loss_usd']) if s['total_loss_usd'] != 0 else 0
+        
+        return f"""📈 **模擬交易報告**
 
-• 總交易: {s['total_trades']} 筆
-• 勝/敗: {s['wins']}/{s['losses']}
-• 勝率: {s['win_rate']:.1f}%
-• 累計盈虧: {s['total_pnl_pct']:+.2f}%
-• 本金: ${CONFIG['capital']:.0f} → ${s['capital']:.0f}
-• 報酬率: {s['return_pct']:+.2f}%"""
+💰 **帳戶**
+• 初始本金: ${CONFIG['capital']:,.0f}
+• 目前餘額: ${s['capital']:,.0f}
+• 報酬率: {s['return_pct']:+.2f}%
+
+📊 **已平倉統計** ({s['total_trades']} 筆)
+• 勝/敗: {s['wins']}/{s['losses']} | 勝率: {s['win_rate']:.1f}%
+• 已實現盈虧: ${s['total_pnl_usd']:+.2f}
+• 總獲利: ${s['total_win_usd']:+.2f} (均 ${avg_win:+.1f}/筆)
+• 總虧損: ${s['total_loss_usd']:+.2f} (均 ${avg_loss:+.1f}/筆)
+• 盈虧比: {profit_factor:.2f}
+
+📍 **持倉中** ({s['open_positions']} 筆)
+• 未實現盈虧: ${s['unrealized_pnl']:+.2f}"""
 
 def send_discord(msg):
     if not DISCORD_WEBHOOK or not msg:
@@ -277,10 +304,12 @@ def show_status():
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
-    lines = [f"📊 **模擬交易狀態** | {now}", ""]
+    summary = get_summary(state)
+    lines = [format_trade_msg("SUMMARY", summary)]
     
     if state["positions"]:
-        lines.append(f"**持倉中 ({len(state['positions'])})**")
+        lines.append("")
+        lines.append("**持倉明細：**")
         for p in state["positions"]:
             current = get_price(p["symbol"])
             if current:
@@ -289,14 +318,16 @@ def show_status():
                 else:
                     pnl = (p["entry_price"] - current) / p["entry_price"] * 100
                 emoji = "📈" if pnl > 0 else "📉"
-                lines.append(f"• {p['symbol']} {p['direction']}: ${p['entry_price']:.4g} → ${current:.4g} ({pnl:+.1f}%) {emoji}")
-        lines.append("")
+                pnl_usd = p["size"] * pnl / 100
+                dir_emoji = "🟢" if p["direction"] == "LONG" else "🔴"
+                lines.append(f"• {dir_emoji} {p['symbol']} {p['direction']}: ${p['entry_price']:.4g} → ${current:.4g} ({pnl:+.1f}% ${pnl_usd:+.1f}) {emoji}")
     
-    summary = get_summary(state)
-    if summary:
-        lines.append(format_trade_msg("SUMMARY", summary))
-    else:
-        lines.append("尚無已平倉交易")
+    if state["closed"]:
+        lines.append("")
+        lines.append(f"**最近平倉 (近5筆)：**")
+        for t in state["closed"][-5:]:
+            emoji = "✅" if t["pnl_pct"] > 0 else "❌"
+            lines.append(f"• {emoji} {t['symbol']} {t['direction']} | {t['reason']} | {t['pnl_pct']:+.2f}% (${t['pnl_usd']:+.1f})")
     
     return "\n".join(lines)
 
