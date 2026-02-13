@@ -6,8 +6,9 @@ from datetime import datetime, timezone, timedelta
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 POSITIONS = [
-    {"name": "BTC 幣本位", "symbol": "BTCUSDT", "entry": 73985.4, "liquidation": 40336, "direction": "LONG", "leverage": 20},
-    {"name": "ETH 幣本位", "symbol": "ETHUSDT", "entry": 2227.92, "liquidation": 1234, "direction": "LONG", "leverage": 20},
+    {"name": "BTC 幣本位", "symbol": "BTCUSDT", "entry": 73985.4, "liquidation": 40336, "direction": "LONG", "leverage": 20, "platform": "OKX"},
+    {"name": "ETH 幣本位", "symbol": "ETHUSDT", "entry": 2227.92, "liquidation": 1234, "direction": "LONG", "leverage": 20, "platform": "OKX"},
+    {"name": "BTC U本位", "symbol": "BTCUSDT", "entry": 86265.28, "liquidation": 45675.82, "direction": "LONG", "leverage": 30, "platform": "Binance"},
 ]
 
 def get_price(symbol):
@@ -118,59 +119,74 @@ def get_action_advice(pos, price, levels):
     bear_1h = levels.get("1H", {}).get("bear_ob")
     bear_4h = levels.get("4H", {}).get("bear_ob")
     
-    add_zone = None
-    if bull_4h:
-        mid = (bull_4h["top"] + bull_4h["bottom"]) / 2
-        dist = (price - mid) / price * 100
-        if dist < 3:
-            add_zone = bull_4h
-            advice.append(f"📍 接近4H OB支撐 ${bull_4h['bottom']:,.0f}-${bull_4h['top']:,.0f}，可小量補倉")
-        elif dist < 5:
-            add_zone = bull_4h
-            advice.append(f"👀 4H OB支撐在 ${bull_4h['bottom']:,.0f}-${bull_4h['top']:,.0f}，等回調到此區再補")
-    
-    if bull_1h and not add_zone:
-        mid = (bull_1h["top"] + bull_1h["bottom"]) / 2
-        dist = (price - mid) / price * 100
-        if dist < 2:
-            advice.append(f"📍 接近1H OB支撐 ${bull_1h['bottom']:,.0f}-${bull_1h['top']:,.0f}，可小量補倉")
-    
     stop_zone = None
     if bull_4h:
         stop_zone = bull_4h["bottom"]
-        advice.append(f"🛑 止損參考: 跌破 ${bull_4h['bottom']:,.0f} (4H OB破)")
     elif bull_1h:
         stop_zone = bull_1h["bottom"]
-        advice.append(f"🛑 止損參考: 跌破 ${bull_1h['bottom']:,.0f} (1H OB破)")
     
-    tp_zone = None
-    if bear_1h:
-        tp_zone = bear_1h
-        dist = abs(price - bear_1h["bottom"]) / price * 100
-        if dist < 2:
-            advice.append(f"⚠️ 接近1H壓力 ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f}，考慮部分減倉鎖利")
-        else:
-            advice.append(f"🎯 上方壓力: ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f}")
-    
-    if bear_4h:
-        advice.append(f"🎯 4H壓力: ${bear_4h['bottom']:,.0f}-${bear_4h['top']:,.0f}")
-    
-    if rsi_4h < 25:
-        advice.append("📊 4H RSI超賣，可能反彈")
-    elif rsi_4h > 75:
-        advice.append("📊 4H RSI超買，小心回調")
-    
-    if rsi_1h < 30:
-        advice.append("📊 1H RSI超賣，短線可能反彈")
-    elif rsi_1h > 70:
-        advice.append("📊 1H RSI超買，短線注意回調")
-    
-    if pnl_pct > -3:
-        advice.append("💡 接近回本，耐心持有")
-    elif pnl_pct > -10:
-        advice.append("💡 虧損可控，等待反彈")
-    else:
+    if pnl_pct < -15 and pos.get("leverage", 20) >= 30:
+        advice.append("⚠️ 虧損大+高槓桿，不建議再加倉")
+        advice.append("💡 等反彈到壓力區考慮減倉降風險")
+        
+        if bear_1h:
+            dist = abs(price - bear_1h["bottom"]) / price * 100
+            advice.append(f"🎯 減倉目標: ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f} ({dist:.1f}%)")
+        if bear_4h:
+            advice.append(f"🎯 4H減倉目標: ${bear_4h['bottom']:,.0f}-${bear_4h['top']:,.0f}")
+        
+        if rsi_4h < 25:
+            advice.append("📊 4H RSI超賣，可能短線反彈，可等反彈後減倉")
+        
+        if stop_zone:
+            advice.append(f"🛑 止損參考: 跌破 ${stop_zone:,.0f}")
+        
         advice.append("💡 虧損較大，嚴格控制風險")
+    else:
+        add_zone = None
+        if bull_4h:
+            mid = (bull_4h["top"] + bull_4h["bottom"]) / 2
+            dist = (price - mid) / price * 100
+            if dist < 3:
+                add_zone = bull_4h
+                advice.append(f"📍 接近4H OB支撐 ${bull_4h['bottom']:,.0f}-${bull_4h['top']:,.0f}，可小量補倉")
+            elif dist < 5:
+                add_zone = bull_4h
+                advice.append(f"👀 4H OB支撐在 ${bull_4h['bottom']:,.0f}-${bull_4h['top']:,.0f}，等回調到此區再補")
+        
+        if bull_1h and not add_zone:
+            mid = (bull_1h["top"] + bull_1h["bottom"]) / 2
+            dist = (price - mid) / price * 100
+            if dist < 2:
+                advice.append(f"📍 接近1H OB支撐 ${bull_1h['bottom']:,.0f}-${bull_1h['top']:,.0f}，可小量補倉")
+        
+        if stop_zone:
+            advice.append(f"🛑 止損參考: 跌破 ${stop_zone:,.0f} (4H OB破)")
+        
+        if bear_1h:
+            dist = abs(price - bear_1h["bottom"]) / price * 100
+            if dist < 2:
+                advice.append(f"⚠️ 接近1H壓力 ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f}，考慮部分減倉鎖利")
+            else:
+                advice.append(f"🎯 上方壓力: ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f}")
+        
+        if bear_4h:
+            advice.append(f"🎯 4H壓力: ${bear_4h['bottom']:,.0f}-${bear_4h['top']:,.0f}")
+        
+        if rsi_4h < 25:
+            advice.append("📊 4H RSI超賣，可能反彈")
+        elif rsi_4h > 75:
+            advice.append("📊 4H RSI超買，小心回調")
+        
+        if rsi_1h < 30:
+            advice.append("📊 1H RSI超賣，短線可能反彈")
+        elif rsi_1h > 70:
+            advice.append("📊 1H RSI超買，短線注意回調")
+        
+        if pnl_pct > -3:
+            advice.append("💡 接近回本，耐心持有")
+        elif pnl_pct > -10:
+            advice.append("💡 虧損可控，等待反彈")
     
     return {
         "name": pos["name"],
