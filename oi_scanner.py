@@ -90,6 +90,37 @@ def get_price_change_1h(symbol):
         pass
     return 0
 
+def detect_early_momentum(symbol):
+    try:
+        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=5m&limit=13"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("code") != "0" or len(data.get("data", [])) < 13:
+            return None
+        
+        sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
+        volumes = [float(k[5]) for k in sorted_data[:-1]]
+        avg_vol = sum(volumes) / len(volumes)
+        
+        latest = sorted_data[-1]
+        prev = sorted_data[-2]
+        latest_vol = float(latest[5])
+        latest_close = float(latest[4])
+        prev_close = float(prev[4])
+        
+        price_change_5m = (latest_close - prev_close) / prev_close * 100 if prev_close > 0 else 0
+        vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 0
+        
+        if abs(price_change_5m) >= 2 and vol_ratio >= 3:
+            return {
+                "price_change_5m": price_change_5m,
+                "vol_ratio": vol_ratio,
+                "direction": "LONG" if price_change_5m > 0 else "SHORT"
+            }
+    except:
+        pass
+    return None
+
 def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 5 and price_change_1h > 3:
         return "LONG", "新多進場，趨勢向上"
@@ -105,7 +136,7 @@ def get_direction_signal(oi_change, price_change_1h):
         return "NONE", ""
 
 def signal_emoji(signal):
-    return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "NONE": "⚪ 無訊號"}.get(signal, signal)
+    return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "EARLY_LONG": "⚡ 早期做多", "EARLY_SHORT": "⚡ 早期做空", "NONE": "⚪ 無訊號"}.get(signal, signal)
 
 def format_message(alerts, scanned, is_smallcap=False):
     tw_tz = timezone(timedelta(hours=8))
@@ -114,17 +145,29 @@ def format_message(alerts, scanned, is_smallcap=False):
     if not alerts:
         return None
     
+    early_count = len([a for a in alerts if a.get("early_warning")])
+    oi_count = len(alerts) - early_count
+    
     title = "🚀 **小幣大波動**" if is_smallcap else "🔍 **OI 異動掃描**"
-    lines = [f"{title} | {now}", f"掃描 {scanned} 幣種，發現 {len(alerts)} 個異動", ""]
+    lines = [f"{title} | {now}", f"掃描 {scanned} 幣種 | 早期⚡{early_count} OI📊{oi_count}", ""]
     
     for a in alerts[:10]:
-        oi_dir = "📈" if a["oi_change"] > 0 else "📉"
-        price_dir = "📈" if a["price_change_1h"] > 0 else "📉"
-        surge = "🔥" if a.get("aggressive") else ("⚡" if a.get("momentum_surge") else "")
+        surge = "🔥" if a.get("aggressive") else ("⚡" if a.get("momentum_surge") or a.get("early_warning") else "")
         
         lines.append(f"**{a['symbol']}** ${a['price']:,.4g} {surge}")
-        lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a['oi'])})")
-        lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
+        
+        if a.get("early_warning"):
+            price_5m = a.get("price_change_5m", 0)
+            vol_ratio = a.get("vol_ratio", 0)
+            p_dir = "📈" if price_5m > 0 else "📉"
+            lines.append(f"• 5分鐘: {p_dir} {price_5m:+.1f}% | 成交量 {vol_ratio:.1f}x 爆量")
+            lines.append(f"• 24H: {a['change_24h']:+.1f}%")
+        else:
+            oi_dir = "📈" if a.get("oi_change", 0) > 0 else "📉"
+            price_dir = "📈" if a.get("price_change_1h", 0) > 0 else "📉"
+            lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a['oi'])})")
+            lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
+        
         reason = "積極信號！" if a.get("aggressive") else ("動能加速！" if a.get("momentum_surge") else a['reason'])
         lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {reason}")
         lines.append("")
@@ -198,18 +241,27 @@ def filter_new_or_consistent(alerts):
             price_1h = abs(a.get("price_change_1h", 0))
             aggressive = oi_change > 10 or price_1h > 5 or (oi_change > 8 and price_1h > 4)
             
-            if aggressive and signal in ["LONG", "SHORT"]:
+            base_signal = signal.replace("EARLY_", "")
+            prev_base = prev_signal.replace("EARLY_", "") if prev_signal else ""
+            is_early = a.get("early_warning", False)
+            
+            if is_early and base_signal in ["LONG", "SHORT"]:
+                a["early_warning"] = True
+                filtered.append(a)
+                new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
+                print(f"⚡ {symbol} 早期預警: 5m {a.get('price_change_5m', 0):+.1f}%, Vol {a.get('vol_ratio', 0):.1f}x")
+            elif aggressive and base_signal in ["LONG", "SHORT"]:
                 a["aggressive"] = True
                 filtered.append(a)
-                new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
+                new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
                 print(f"🔥 {symbol} 積極信號突破冷卻: OI {oi_change:.1f}%, 1H {price_1h:.1f}%")
             elif time_diff > 3600:
-                if signal == prev_signal:
+                if base_signal == prev_base:
                     filtered.append(a)
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
                 else:
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-            elif momentum_surge and signal == prev_signal:
+            elif momentum_surge and base_signal == prev_base:
                 a["momentum_surge"] = True
                 filtered.append(a)
                 new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
@@ -243,6 +295,26 @@ def main():
     
     sorted_by_oi = sorted(current_data, key=lambda x: x["oi"], reverse=True)
     top_100 = set(c["symbol"] for c in sorted_by_oi[:100])
+    
+    early_alerts = []
+    print("掃描早期動能信號...")
+    for coin in sorted_by_oi[:30]:
+        momentum = detect_early_momentum(coin["symbol"])
+        if momentum:
+            early_alerts.append({
+                "symbol": coin["symbol"],
+                "price": coin["price"],
+                "oi": coin["oi"],
+                "oi_change": 0,
+                "price_change_1h": 0,
+                "price_change_5m": momentum["price_change_5m"],
+                "vol_ratio": momentum["vol_ratio"],
+                "change_24h": coin["change_24h"],
+                "signal": f"EARLY_{momentum['direction']}",
+                "reason": f"5分鐘爆量 {momentum['vol_ratio']:.1f}x",
+                "early_warning": True
+            })
+            print(f"⚡ [早期] {coin['symbol']}: 5m {momentum['price_change_5m']:+.1f}%, Vol {momentum['vol_ratio']:.1f}x")
     
     current_state = {}
     top_alerts = []
@@ -298,11 +370,12 @@ def main():
     top_alerts.sort(key=lambda x: abs(x["oi_change"]), reverse=True)
     smallcap_alerts.sort(key=lambda x: abs(x["change_24h"]), reverse=True)
     
-    all_alerts = top_alerts + smallcap_alerts
-    log_signals(all_alerts)
-    print(f"偵測到 {len(all_alerts)} 個訊號")
+    all_oi_alerts = top_alerts + smallcap_alerts
+    log_signals(all_oi_alerts)
+    print(f"偵測到 {len(all_oi_alerts)} 個OI訊號, {len(early_alerts)} 個早期訊號")
     
-    top_actionable = [a for a in top_alerts if a["signal"] in ["LONG", "SHORT", "PENDING"]]
+    combined_top = early_alerts + top_alerts
+    top_actionable = [a for a in combined_top if a["signal"] in ["LONG", "SHORT", "PENDING", "EARLY_LONG", "EARLY_SHORT"]]
     top_filtered = filter_new_or_consistent(top_actionable)
     if top_filtered:
         msg = format_message(top_filtered, 100, is_smallcap=False)
