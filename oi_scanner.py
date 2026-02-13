@@ -120,11 +120,13 @@ def format_message(alerts, scanned, is_smallcap=False):
     for a in alerts[:10]:
         oi_dir = "📈" if a["oi_change"] > 0 else "📉"
         price_dir = "📈" if a["price_change_1h"] > 0 else "📉"
+        surge = "⚡" if a.get("momentum_surge") else ""
         
-        lines.append(f"**{a['symbol']}** ${a['price']:,.4g}")
+        lines.append(f"**{a['symbol']}** ${a['price']:,.4g} {surge}")
         lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a['oi'])})")
         lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
-        lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {a['reason']}")
+        reason = "動能加速！" if a.get("momentum_surge") else a['reason']
+        lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {reason}")
         lines.append("")
     
     return "\n".join(lines)
@@ -178,23 +180,37 @@ def filter_new_or_consistent(alerts):
     for a in alerts:
         symbol = a["symbol"]
         signal = a["signal"]
+        oi_change = abs(a.get("oi_change", 0))
+        change_24h = abs(a.get("change_24h", 0))
         
         if symbol in notified:
             prev = notified[symbol]
             prev_signal = prev.get("signal")
+            prev_oi = prev.get("oi_change", 0)
+            prev_24h = prev.get("change_24h", 0)
             prev_time = datetime.fromisoformat(prev.get("ts", "2000-01-01T00:00:00"))
+            time_diff = (now - prev_time).total_seconds()
             
-            if (now - prev_time).total_seconds() > 1800:
+            oi_increased = oi_change > prev_oi * 1.5 or (oi_change - prev_oi) > 5
+            trend_accelerated = change_24h > prev_24h + 3
+            momentum_surge = oi_increased or trend_accelerated
+            
+            if time_diff > 1800:
                 if signal == prev_signal:
                     filtered.append(a)
-                    new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+                    new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
                 else:
-                    new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+                    new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
+            elif momentum_surge and signal == prev_signal:
+                a["momentum_surge"] = True
+                filtered.append(a)
+                new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
+                print(f"⚡ {symbol} 動能加速: OI {prev_oi:.1f}%→{oi_change:.1f}%, 24H {prev_24h:.1f}%→{change_24h:.1f}%")
             else:
                 new_notified[symbol] = prev
         else:
             filtered.append(a)
-            new_notified[symbol] = {"signal": signal, "ts": now.isoformat()}
+            new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
     
     for sym, data in notified.items():
         if sym not in new_notified:
