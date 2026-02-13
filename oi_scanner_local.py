@@ -64,15 +64,15 @@ def get_price_change_1h(symbol):
     return 0
 
 def get_direction_signal(oi_change, price_change_1h):
-    if oi_change > 3 and price_change_1h > 1.5:
+    if oi_change > 5 and price_change_1h > 3:
         return "LONG", "新多進場，趨勢向上"
-    elif oi_change > 3 and price_change_1h < -1.5:
+    elif oi_change > 5 and price_change_1h < -3:
         return "SHORT", "新空進場，趨勢向下"
-    elif oi_change < -3 and price_change_1h > 1.5:
+    elif oi_change < -5 and price_change_1h > 3:
         return "WAIT", "軋空反彈，動能不足"
-    elif oi_change < -3 and price_change_1h < -1.5:
+    elif oi_change < -5 and price_change_1h < -3:
         return "WAIT", "多頭平倉，恐慌拋售"
-    elif abs(oi_change) > 5 and abs(price_change_1h) < 1:
+    elif abs(oi_change) > 8 and abs(price_change_1h) < 2:
         return "PENDING", "多空對峙，即將變盤"
     else:
         return "NONE", ""
@@ -168,7 +168,7 @@ def filter_new_or_consistent(alerts):
             trend_accelerated = change_24h > prev_24h + 3
             momentum_surge = oi_increased or trend_accelerated
             
-            if time_diff > 1800:
+            if time_diff > 3600:
                 if signal == prev_signal:
                     filtered.append(a)
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
@@ -250,7 +250,7 @@ def main():
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
-        if signal != "NONE" or abs(coin["change_24h"]) >= 15:
+        if signal in ["LONG", "SHORT"]:
             alerts.append({
                 "symbol": base,
                 "price": coin["price"],
@@ -258,8 +258,19 @@ def main():
                 "oi_change": oi_change,
                 "price_change_1h": price_change_1h,
                 "change_24h": coin["change_24h"],
-                "signal": signal if signal != "NONE" else ("LONG" if coin["change_24h"] > 0 else "SHORT"),
-                "reason": reason if reason else ("24H大漲" if coin["change_24h"] > 0 else "24H大跌")
+                "signal": signal,
+                "reason": reason
+            })
+        elif signal in ["WAIT", "PENDING"] and abs(oi_change) > 8:
+            alerts.append({
+                "symbol": base,
+                "price": coin["price"],
+                "oi": oi_usd,
+                "oi_change": oi_change,
+                "price_change_1h": price_change_1h,
+                "change_24h": coin["change_24h"],
+                "signal": signal,
+                "reason": reason
             })
             print(f"🚨 {base}: 24H {coin['change_24h']:+.1f}%, 1H {price_change_1h:+.1f}%, OI {oi_change:+.1f}%")
     

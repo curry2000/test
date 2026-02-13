@@ -91,15 +91,15 @@ def get_price_change_1h(symbol):
     return 0
 
 def get_direction_signal(oi_change, price_change_1h):
-    if oi_change > 3 and price_change_1h > 1.5:
+    if oi_change > 5 and price_change_1h > 3:
         return "LONG", "新多進場，趨勢向上"
-    elif oi_change > 3 and price_change_1h < -1.5:
+    elif oi_change > 5 and price_change_1h < -3:
         return "SHORT", "新空進場，趨勢向下"
-    elif oi_change < -3 and price_change_1h > 1.5:
+    elif oi_change < -5 and price_change_1h > 3:
         return "WAIT", "軋空反彈，動能不足"
-    elif oi_change < -3 and price_change_1h < -1.5:
+    elif oi_change < -5 and price_change_1h < -3:
         return "WAIT", "多頭平倉，恐慌拋售"
-    elif abs(oi_change) > 5 and abs(price_change_1h) < 1:
+    elif abs(oi_change) > 8 and abs(price_change_1h) < 2:
         return "PENDING", "多空對峙，即將變盤"
     else:
         return "NONE", ""
@@ -195,7 +195,7 @@ def filter_new_or_consistent(alerts):
             trend_accelerated = change_24h > prev_24h + 3
             momentum_surge = oi_increased or trend_accelerated
             
-            if time_diff > 1800:
+            if time_diff > 3600:
                 if signal == prev_signal:
                     filtered.append(a)
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
@@ -253,11 +253,11 @@ def main():
         is_top = symbol in top_100
         
         if is_top:
-            threshold_oi = 3
-            threshold_price = 3
+            threshold_oi = 5
+            threshold_price = 5
         else:
             threshold_oi = 8
-            threshold_price = 10
+            threshold_price = 15
         
         if abs(oi_change) < threshold_oi and abs(coin["change_24h"]) < threshold_price:
             continue
@@ -277,11 +277,11 @@ def main():
         }
         
         if is_top:
-            if abs(oi_change) >= 3 or abs(price_change_1h) >= 3:
+            if signal in ["LONG", "SHORT"] or (signal == "PENDING" and abs(oi_change) >= 8):
                 top_alerts.append(alert)
                 print(f"🚨 [TOP] {symbol}: OI {oi_change:+.1f}%, 1H {price_change_1h:+.1f}% → {signal_emoji(signal)}")
         else:
-            if (abs(oi_change) >= 8 and abs(price_change_1h) >= 5) or abs(coin["change_24h"]) >= 20:
+            if signal in ["LONG", "SHORT"] and abs(oi_change) >= 8:
                 smallcap_alerts.append(alert)
                 print(f"🚀 [SMALL] {symbol}: OI {oi_change:+.1f}%, 24H {coin['change_24h']:+.1f}% → {signal_emoji(signal)}")
     
