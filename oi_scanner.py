@@ -76,6 +76,21 @@ def get_okx_oi_data():
     
     return results
 
+def get_oi_change_1h(symbol):
+    try:
+        url = f"https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId={symbol}-USDT-SWAP&period=1H"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("code") == "0" and len(data.get("data", [])) >= 2:
+            sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
+            old_oi = float(sorted_data[-2][3])
+            new_oi = float(sorted_data[-1][3])
+            change = (new_oi - old_oi) / old_oi * 100 if old_oi > 0 else 0
+            return change, new_oi
+    except:
+        pass
+    return 0, 0
+
 def get_price_change_1h(symbol):
     try:
         url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=1H&limit=2"
@@ -362,11 +377,9 @@ def main():
         symbol = coin["symbol"]
         current_state[symbol] = {"oi": coin["oi"], "price": coin["price"]}
         
-        if symbol in prev_state:
-            prev_oi = prev_state[symbol].get("oi", coin["oi"])
-            oi_change = (coin["oi"] - prev_oi) / prev_oi * 100 if prev_oi > 0 else 0
-        else:
-            oi_change = 0
+        oi_change, oi_usd = get_oi_change_1h(symbol)
+        if oi_usd > 0:
+            coin["oi"] = oi_usd
         
         is_top = symbol in top_100
         

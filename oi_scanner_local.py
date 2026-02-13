@@ -50,6 +50,20 @@ def get_oi_for_symbol(symbol):
         pass
     return symbol, 0
 
+def get_oi_change_1h(symbol):
+    try:
+        url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period=1h&limit=2"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if isinstance(data, list) and len(data) >= 2:
+            old_oi = float(data[0]["sumOpenInterestValue"])
+            new_oi = float(data[1]["sumOpenInterestValue"])
+            change = (new_oi - old_oi) / old_oi * 100 if old_oi > 0 else 0
+            return change, new_oi
+    except:
+        pass
+    return 0, 0
+
 def get_price_change_1h(symbol):
     try:
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=2"
@@ -352,22 +366,16 @@ def main():
     alerts = []
     current_state = {}
     
-    for coin in candidates[:50]:
+    for coin in candidates[:80]:
         symbol = coin["full_symbol"]
         base = coin["symbol"]
         
-        _, oi = get_oi_for_symbol(symbol)
-        if oi == 0:
-            continue
+        oi_change, oi_usd = get_oi_change_1h(symbol)
+        if oi_usd == 0:
+            _, oi = get_oi_for_symbol(symbol)
+            oi_usd = oi * coin["price"]
         
-        oi_usd = oi * coin["price"]
         current_state[base] = {"oi": oi_usd, "price": coin["price"]}
-        
-        oi_change = 0
-        if base in prev_state:
-            prev_oi = prev_state[base].get("oi", oi_usd)
-            if prev_oi > 0:
-                oi_change = (oi_usd - prev_oi) / prev_oi * 100
         
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
