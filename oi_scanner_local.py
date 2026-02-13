@@ -500,8 +500,31 @@ def main():
         message = format_message(filtered_alerts, len(tickers))
         print("\n" + message)
         send_discord(message)
+        
+        try:
+            from paper_trader import process_signal, check_and_close
+            
+            check_and_close()
+            
+            for a in filtered_alerts:
+                if a["signal"] in ["LONG", "SHORT"]:
+                    process_signal(
+                        a["symbol"],
+                        a["signal"],
+                        a["price"],
+                        a.get("phase", ""),
+                        a.get("rsi", 50)
+                    )
+        except Exception as e:
+            print(f"Paper trading error: {e}")
     else:
         print(f"掃描 {len(tickers)} 幣種，無新訊號或方向已改變")
+        
+        try:
+            from paper_trader import check_and_close
+            check_and_close()
+        except:
+            pass
 
 if __name__ == "__main__":
     main()
