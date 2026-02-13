@@ -63,32 +63,37 @@ def get_price_change_1h(symbol):
         pass
     return 0
 
+MC_CACHE = {}
+
 def get_market_cap(symbol):
     base = symbol.replace("USDT", "").lower()
-    try:
-        url = f"https://api.coingecko.com/api/v3/simple/price?ids={base}&vs_currencies=usd&include_market_cap=true"
-        r = requests.get(url, timeout=5)
-        data = r.json()
-        if base in data and "usd_market_cap" in data[base]:
-            return data[base]["usd_market_cap"]
-    except:
-        pass
+    
+    if base in MC_CACHE:
+        return MC_CACHE[base]
     
     coin_map = {
         "btc": "bitcoin", "eth": "ethereum", "sol": "solana", "bnb": "binancecoin",
         "xrp": "ripple", "doge": "dogecoin", "ada": "cardano", "avax": "avalanche-2",
-        "shib": "shiba-inu", "link": "chainlink", "dot": "polkadot", "matic": "matic-network"
+        "shib": "shiba-inu", "link": "chainlink", "dot": "polkadot", "matic": "matic-network",
+        "sui": "sui", "apt": "aptos", "arb": "arbitrum", "op": "optimism"
     }
-    if base in coin_map:
-        try:
-            url = f"https://api.coingecko.com/api/v3/simple/price?ids={coin_map[base]}&vs_currencies=usd&include_market_cap=true"
-            r = requests.get(url, timeout=5)
-            data = r.json()
-            cg_id = coin_map[base]
-            if cg_id in data and "usd_market_cap" in data[cg_id]:
-                return data[cg_id]["usd_market_cap"]
-        except:
-            pass
+    
+    cg_id = coin_map.get(base, base)
+    
+    try:
+        import time
+        time.sleep(0.5)
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd&include_market_cap=true"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if cg_id in data and "usd_market_cap" in data[cg_id]:
+            mc = data[cg_id]["usd_market_cap"]
+            MC_CACHE[base] = mc
+            return mc
+    except:
+        pass
+    
+    MC_CACHE[base] = None
     return None
 
 def detect_early_momentum(symbol):
