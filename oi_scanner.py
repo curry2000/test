@@ -169,6 +169,63 @@ def detect_early_momentum(symbol):
         pass
     return None
 
+def get_market_phase(symbol):
+    try:
+        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=1H&limit=26"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("code") != "0" or len(data.get("data", [])) < 26:
+            return None
+        
+        sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
+        closes = [float(k[4]) for k in sorted_data]
+        current_price = closes[-1]
+        
+        ma7 = sum(closes[-7:]) / 7
+        ma25 = sum(closes[-25:]) / 25
+        
+        gains, losses = [], []
+        for i in range(1, min(15, len(closes))):
+            diff = closes[i] - closes[i-1]
+            gains.append(diff if diff > 0 else 0)
+            losses.append(-diff if diff < 0 else 0)
+        avg_gain = sum(gains) / len(gains) if gains else 0
+        avg_loss = sum(losses) / len(losses) if losses else 0.0001
+        rs = avg_gain / avg_loss if avg_loss > 0 else 100
+        rsi = 100 - (100 / (1 + rs))
+        
+        ma_distance = (current_price - ma25) / ma25 * 100 if ma25 > 0 else 0
+        
+        high_24h = max(closes[-24:])
+        low_24h = min(closes[-24:])
+        price_range = high_24h - low_24h
+        price_position = (current_price - low_24h) / price_range * 100 if price_range > 0 else 50
+        
+        return {"rsi": rsi, "ma_distance": ma_distance, "price_position": price_position}
+    except:
+        pass
+    return None
+
+def get_phase_label(phase_data, signal):
+    if not phase_data:
+        return ""
+    rsi, ma_dist, pos = phase_data["rsi"], phase_data["ma_distance"], phase_data["price_position"]
+    if signal == "LONG":
+        if rsi > 75 or ma_dist > 15 or pos > 90:
+            return "⚠️高位追高"
+        elif rsi > 65 or ma_dist > 8 or pos > 75:
+            return "🔥行情中段"
+        else:
+            return "🌱啟動初期"
+    elif signal == "SHORT":
+        if rsi < 25 or ma_dist < -15 or pos < 10:
+            return "⚠️低位追空"
+        elif rsi < 35 or ma_dist < -8 or pos < 25:
+            return "🔥行情中段"
+        else:
+            return "🌱啟動初期"
+    return ""
+
 def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 5 and price_change_1h > 3:
         return "LONG", "新多進場，趨勢向上"
@@ -222,7 +279,12 @@ def format_message(alerts, scanned, is_smallcap=False):
             lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
         
         reason = "積極信號！" if a.get("aggressive") else ("動能加速！" if a.get("momentum_surge") else a['reason'])
-        lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {reason}")
+        phase = a.get("phase", "")
+        rsi = a.get("rsi", 0)
+        if phase and rsi:
+            lines.append(f"• 訊號: {signal_emoji(a['signal'])} {phase} | RSI: {rsi:.0f}")
+        else:
+            lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {reason}")
         lines.append("")
     
     return "\n".join(lines)
@@ -396,6 +458,9 @@ def main():
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
+        phase_data = get_market_phase(symbol) if signal in ["LONG", "SHORT"] else None
+        phase_label = get_phase_label(phase_data, signal) if phase_data else ""
+        
         alert = {
             "symbol": symbol,
             "price": coin["price"],
@@ -404,7 +469,9 @@ def main():
             "price_change_1h": price_change_1h,
             "change_24h": coin["change_24h"],
             "signal": signal,
-            "reason": reason
+            "reason": reason,
+            "phase": phase_label,
+            "rsi": phase_data["rsi"] if phase_data else 0
         }
         
         if is_top:
