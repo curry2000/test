@@ -7,6 +7,7 @@ import numpy as np
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 SIGNAL_LOG = "monitor_signals.json"
+OB_STATE_FILE = "ob_state.json"
 
 CONFIDENCE_TABLE = {
     "rsi_high_bearish": 75,
@@ -136,6 +137,97 @@ def get_confidence(ob):
             return CONFIDENCE_TABLE["high_vol_bullish"]
         else:
             return CONFIDENCE_TABLE["normal_bullish"]
+
+def check_ob_status(symbol, price, bullish_obs, bearish_obs):
+    ob_state = load_json(OB_STATE_FILE)
+    if not isinstance(ob_state, dict):
+        ob_state = {}
+    
+    base = symbol.replace("USDT", "")
+    if base not in ob_state:
+        ob_state[base] = {"bullish": [], "bearish": [], "alerts": []}
+    
+    alerts = []
+    current_bullish = []
+    current_bearish = []
+    
+    for ob in bullish_obs:
+        mid = (ob["top"] + ob["bottom"]) / 2
+        ob_key = f"{ob['tf']}_{ob['bottom']:.0f}_{ob['top']:.0f}"
+        current_bullish.append(ob_key)
+        
+        dist_to_top = (price - ob["top"]) / price * 100
+        
+        if dist_to_top < 1.5 and dist_to_top > 0:
+            was_touched = any(o.get("key") == ob_key and o.get("touched") for o in ob_state[base].get("bullish", []))
+            if not was_touched:
+                alerts.append({
+                    "type": "DEFEND",
+                    "ob_type": "bullish",
+                    "symbol": base,
+                    "price": price,
+                    "ob": ob,
+                    "mid": mid,
+                    "message": f"✅ {base} ${price:,.0f} 守住支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+                })
+                ob_state[base]["bullish"] = [{"key": ob_key, "touched": True} if o.get("key") == ob_key else o for o in ob_state[base].get("bullish", [])]
+                if not any(o.get("key") == ob_key for o in ob_state[base]["bullish"]):
+                    ob_state[base]["bullish"].append({"key": ob_key, "touched": True})
+    
+    for ob in bearish_obs:
+        mid = (ob["top"] + ob["bottom"]) / 2
+        ob_key = f"{ob['tf']}_{ob['bottom']:.0f}_{ob['top']:.0f}"
+        current_bearish.append(ob_key)
+        
+        dist_to_bottom = (ob["bottom"] - price) / price * 100
+        
+        if dist_to_bottom < 1.5 and dist_to_bottom > 0:
+            was_touched = any(o.get("key") == ob_key and o.get("touched") for o in ob_state[base].get("bearish", []))
+            if not was_touched:
+                alerts.append({
+                    "type": "DEFEND",
+                    "ob_type": "bearish",
+                    "symbol": base,
+                    "price": price,
+                    "ob": ob,
+                    "mid": mid,
+                    "message": f"✅ {base} ${price:,.0f} 守住阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+                })
+                ob_state[base]["bearish"] = [{"key": ob_key, "touched": True} if o.get("key") == ob_key else o for o in ob_state[base].get("bearish", [])]
+                if not any(o.get("key") == ob_key for o in ob_state[base]["bearish"]):
+                    ob_state[base]["bearish"].append({"key": ob_key, "touched": True})
+    
+    prev_bullish = [o.get("key") for o in ob_state[base].get("bullish", [])]
+    for ob_key in prev_bullish:
+        if ob_key not in current_bullish:
+            parts = ob_key.split("_")
+            if len(parts) >= 3:
+                alerts.append({
+                    "type": "BREAK",
+                    "ob_type": "bullish",
+                    "symbol": base,
+                    "price": price,
+                    "message": f"❌ {base} ${price:,.0f} 跌破支撐 OB [{parts[0]}] ${parts[1]}-${parts[2]}"
+                })
+    
+    prev_bearish = [o.get("key") for o in ob_state[base].get("bearish", [])]
+    for ob_key in prev_bearish:
+        if ob_key not in current_bearish:
+            parts = ob_key.split("_")
+            if len(parts) >= 3:
+                alerts.append({
+                    "type": "BREAK",
+                    "ob_type": "bearish",
+                    "symbol": base,
+                    "price": price,
+                    "message": f"❌ {base} ${price:,.0f} 突破阻力 OB [{parts[0]}] ${parts[1]}-${parts[2]}"
+                })
+    
+    ob_state[base]["bullish"] = [{"key": k, "touched": False} for k in current_bullish]
+    ob_state[base]["bearish"] = [{"key": k, "touched": False} for k in current_bearish]
+    
+    save_json(OB_STATE_FILE, ob_state)
+    return alerts
 
 def detect_signals(analysis):
     signals = []
@@ -329,11 +421,13 @@ def format_message(analyses):
         
         if a["bullish_obs"]:
             for ob in a["bullish_obs"][:2]:
-                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📈做多 {ob['confidence']}%")
+                mid = (ob['top'] + ob['bottom']) / 2
+                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📈做多 {ob['confidence']}%")
         
         if a["bearish_obs"]:
             for ob in a["bearish_obs"][:2]:
-                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📉做空 {ob['confidence']}%")
+                mid = (ob['top'] + ob['bottom']) / 2
+                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📉做空 {ob['confidence']}%")
         
         lines.append("")
     
@@ -359,6 +453,7 @@ def main():
     
     analyses = []
     all_signals = []
+    ob_alerts = []
     
     for symbol in SYMBOLS:
         print(f"Analyzing {symbol}...")
@@ -367,7 +462,16 @@ def main():
             analyses.append(result)
             signals = detect_signals(result)
             all_signals.extend(signals)
-            print(f"  OK: ${result['price']:,.2f}, {len(signals)} 訊號")
+            
+            ob_status = check_ob_status(
+                symbol, 
+                result["price"], 
+                result["bullish_obs"], 
+                result["bearish_obs"]
+            )
+            ob_alerts.extend(ob_status)
+            
+            print(f"  OK: ${result['price']:,.2f}, {len(signals)} 訊號, {len(ob_status)} OB狀態")
     
     log_signals(all_signals)
     
@@ -375,7 +479,18 @@ def main():
         message = format_message(analyses)
         print("\n" + message)
         send_discord(message)
-    else:
+    
+    if ob_alerts:
+        tw_tz = timezone(timedelta(hours=8))
+        now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
+        ob_lines = [f"🎯 **OB 狀態更新** | {now}", ""]
+        for alert in ob_alerts:
+            ob_lines.append(alert["message"])
+        ob_message = "\n".join(ob_lines)
+        print("\n" + ob_message)
+        send_discord(ob_message)
+    
+    if not analyses:
         print("No data")
 
 if __name__ == "__main__":
