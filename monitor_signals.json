@@ -1,1 +1,38 @@
-[]
+[
+  {
+    "ts": "2026-02-14T01:52:30.978089+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69066.3,
+    "confidence": 60,
+    "rsi_1h": 73.16481613280426
+  },
+  {
+    "ts": "2026-02-14T01:52:30.978089+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 69066.3,
+    "confidence": 55,
+    "rsi_1h": 73.16481613280426
+  },
+  {
+    "ts": "2026-02-14T01:52:30.978089+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2058.09,
+    "confidence": 45,
+    "rsi_1h": 77.41861489832358
+  },
+  {
+    "ts": "2026-02-14T01:52:30.978089+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 2058.09,
+    "confidence": 55,
+    "rsi_1h": 77.41861489832358
+  }
+]

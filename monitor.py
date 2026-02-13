@@ -106,37 +106,99 @@ def find_order_blocks(klines, swing_length=3):
         if is_swing_high and vol_ratio > 0.5:
             for j in range(1, min(5, i+1)):
                 if klines[i-j]["close"] > klines[i-j]["open"]:
+                    has_fvg = check_fvg(klines, i, "bearish")
                     obs.append({"type": "bearish", "top": klines[i-j]["high"], "bottom": klines[i-j]["low"],
-                               "vol_ratio": vol_ratio, "rsi": rsi_at_ob, "index": i})
+                               "vol_ratio": vol_ratio, "rsi": rsi_at_ob, "index": i, "fvg": has_fvg})
                     break
         
         if is_swing_low and vol_ratio > 0.5:
             for j in range(1, min(5, i+1)):
                 if klines[i-j]["close"] < klines[i-j]["open"]:
+                    has_fvg = check_fvg(klines, i, "bullish")
                     obs.append({"type": "bullish", "top": klines[i-j]["high"], "bottom": klines[i-j]["low"],
-                               "vol_ratio": vol_ratio, "rsi": rsi_at_ob, "index": i})
+                               "vol_ratio": vol_ratio, "rsi": rsi_at_ob, "index": i, "fvg": has_fvg})
                     break
     
     return obs
 
+def check_fvg(klines, index, direction):
+    if index < 2 or index >= len(klines) - 1:
+        return None
+    
+    prev = klines[index - 1]
+    curr = klines[index]
+    nxt = klines[index + 1]
+    
+    if direction == "bullish":
+        gap_top = prev["low"]
+        gap_bottom = nxt["high"]
+        if gap_bottom < gap_top:
+            return {"top": gap_top, "bottom": gap_bottom, "filled": False}
+    else:
+        gap_top = nxt["low"]
+        gap_bottom = prev["high"]
+        if gap_top > gap_bottom:
+            return {"top": gap_top, "bottom": gap_bottom, "filled": False}
+    
+    return None
+
+def find_standalone_fvgs(klines, current_price):
+    fvgs = []
+    if len(klines) < 3:
+        return fvgs
+    
+    for i in range(1, len(klines) - 1):
+        prev = klines[i - 1]
+        curr = klines[i]
+        nxt = klines[i + 1]
+        
+        if nxt["low"] > prev["high"]:
+            gap_top = nxt["low"]
+            gap_bottom = prev["high"]
+            mid = (gap_top + gap_bottom) / 2
+            gap_pct = (gap_top - gap_bottom) / current_price * 100
+            if gap_pct > 0.3 and current_price > gap_top:
+                fvgs.append({"type": "bullish", "top": gap_top, "bottom": gap_bottom, "mid": mid, "gap_pct": gap_pct})
+        
+        if prev["low"] > nxt["high"]:
+            gap_top = prev["low"]
+            gap_bottom = nxt["high"]
+            mid = (gap_top + gap_bottom) / 2
+            gap_pct = (gap_top - gap_bottom) / current_price * 100
+            if gap_pct > 0.3 and current_price < gap_bottom:
+                fvgs.append({"type": "bearish", "top": gap_top, "bottom": gap_bottom, "mid": mid, "gap_pct": gap_pct})
+    
+    return fvgs
+
 def get_confidence(ob):
     high_vol = ob.get("vol_ratio", 1) > 1.2
     rsi = ob.get("rsi", 50)
+    has_fvg = ob.get("fvg") is not None
+    vol_ratio = ob.get("vol_ratio", 1)
     
     if ob["type"] == "bearish":
         if rsi > 65:
-            return CONFIDENCE_TABLE["rsi_high_bearish"]
+            base = CONFIDENCE_TABLE["rsi_high_bearish"]
         elif high_vol:
-            return CONFIDENCE_TABLE["high_vol_bearish"]
+            base = CONFIDENCE_TABLE["high_vol_bearish"]
         else:
-            return CONFIDENCE_TABLE["normal_bearish"]
+            base = CONFIDENCE_TABLE["normal_bearish"]
     else:
         if rsi < 35:
-            return CONFIDENCE_TABLE["rsi_low_bullish"]
+            base = CONFIDENCE_TABLE["rsi_low_bullish"]
         elif high_vol:
-            return CONFIDENCE_TABLE["high_vol_bullish"]
+            base = CONFIDENCE_TABLE["high_vol_bullish"]
         else:
-            return CONFIDENCE_TABLE["normal_bullish"]
+            base = CONFIDENCE_TABLE["normal_bullish"]
+    
+    if has_fvg:
+        base += 10
+    if vol_ratio > 2.0:
+        base += 8
+    elif vol_ratio > 1.5:
+        base += 5
+    
+    return min(base, 95)
 
 def check_ob_status(symbol, price, bullish_obs, bearish_obs):
     ob_state = load_json(OB_STATE_FILE)
@@ -357,6 +419,7 @@ def analyze_symbol(symbol):
     rsi_4h = calculate_rsi(klines_4h) if klines_4h else 50
     
     all_obs = []
+    all_fvgs = []
     for tf_name, klines, swing in [("15M", klines_15m, 2), ("1H", klines_1h, 3), ("4H", klines_4h, 3)]:
         if not klines:
             continue
@@ -366,6 +429,13 @@ def analyze_symbol(symbol):
             ob["distance"] = (current_price - mid) / current_price * 100
             ob["confidence"] = get_confidence(ob)
             all_obs.append(ob)
+        
+        fvgs = find_standalone_fvgs(klines, current_price)
+        for fvg in fvgs[-3:]:
+            fvg["tf"] = tf_name
+            mid = (fvg["top"] + fvg["bottom"]) / 2
+            fvg["distance"] = (current_price - mid) / current_price * 100
+            all_fvgs.append(fvg)
     
     bullish_obs = sorted([ob for ob in all_obs if ob["type"] == "bullish" and current_price > ob["top"]],
                         key=lambda x: x["distance"])[:3]
@@ -387,6 +457,9 @@ def analyze_symbol(symbol):
     bullish_obs = dedupe_obs(bullish_obs)
     bearish_obs = dedupe_obs(bearish_obs)
     
+    bullish_fvgs = sorted([f for f in all_fvgs if f["type"] == "bullish"], key=lambda x: x["distance"])[:2]
+    bearish_fvgs = sorted([f for f in all_fvgs if f["type"] == "bearish"], key=lambda x: abs(x["distance"]))[:2]
+    
     highs = [k["high"] for k in klines_1h] if klines_1h else [current_price]
     lows = [k["low"] for k in klines_1h] if klines_1h else [current_price]
     support = min(lows[-24:]) if len(lows) >= 24 else min(lows)
@@ -399,7 +472,9 @@ def analyze_symbol(symbol):
         "support": support,
         "resistance": resistance,
         "bullish_obs": bullish_obs,
-        "bearish_obs": bearish_obs
+        "bearish_obs": bearish_obs,
+        "bullish_fvgs": bullish_fvgs,
+        "bearish_fvgs": bearish_fvgs
     }
 
 def format_message(analyses):
@@ -422,12 +497,22 @@ def format_message(analyses):
         if a["bullish_obs"]:
             for ob in a["bullish_obs"][:2]:
                 mid = (ob['top'] + ob['bottom']) / 2
-                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📈做多 {ob['confidence']}%")
+                vol_tag = f" 📊{ob['vol_ratio']:.1f}x" if ob.get('vol_ratio', 0) > 1.2 else ""
+                fvg_tag = " ⚡FVG" if ob.get('fvg') else ""
+                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📈做多 {ob['confidence']}%{vol_tag}{fvg_tag}")
         
         if a["bearish_obs"]:
             for ob in a["bearish_obs"][:2]:
                 mid = (ob['top'] + ob['bottom']) / 2
-                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📉做空 {ob['confidence']}%")
+                vol_tag = f" 📊{ob['vol_ratio']:.1f}x" if ob.get('vol_ratio', 0) > 1.2 else ""
+                fvg_tag = " ⚡FVG" if ob.get('fvg') else ""
+                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📉做空 {ob['confidence']}%{vol_tag}{fvg_tag}")
+        
+        if a.get("bullish_fvgs") or a.get("bearish_fvgs"):
+            for fvg in a.get("bullish_fvgs", [])[:1]:
+                lines.append(f"⚡ [{fvg['tf']}] 多方缺口 ${fvg['bottom']:,.0f}-${fvg['top']:,.0f} ({fvg['gap_pct']:.1f}%)")
+            for fvg in a.get("bearish_fvgs", [])[:1]:
+                lines.append(f"⚡ [{fvg['tf']}] 空方缺口 ${fvg['bottom']:,.0f}-${fvg['top']:,.0f} ({fvg['gap_pct']:.1f}%)")
         
         lines.append("")
     

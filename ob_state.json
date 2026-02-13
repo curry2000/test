@@ -1,0 +1,26 @@
+{
+  "BTC": {
+    "bullish": [
+      {
+        "key": "4H_66970_68390",
+        "touched": false
+      }
+    ],
+    "bearish": [],
+    "alerts": []
+  },
+  "ETH": {
+    "bullish": [
+      {
+        "key": "4H_1994_2030",
+        "touched": false
+      },
+      {
+        "key": "4H_1937_2010",
+        "touched": false
+      }
+    ],
+    "bearish": [],
+    "alerts": []
+  }
+}
