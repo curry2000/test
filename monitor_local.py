@@ -7,6 +7,7 @@ import numpy as np
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 SIGNAL_LOG = os.path.expanduser("~/.openclaw/monitor_signals_local.json")
+OB_STATE_FILE = os.path.expanduser("~/.openclaw/ob_state_local.json")
 
 CONFIDENCE_TABLE = {
     "rsi_high_bearish": 75,
@@ -284,11 +285,13 @@ def format_message(analyses):
         
         if a["bullish_obs"]:
             for ob in a["bullish_obs"][:2]:
-                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📈做多 {ob['confidence']}%")
+                mid = (ob['top'] + ob['bottom']) / 2
+                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📈做多 {ob['confidence']}%")
         
         if a["bearish_obs"]:
             for ob in a["bearish_obs"][:2]:
-                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} | 📉做空 {ob['confidence']}%")
+                mid = (ob['top'] + ob['bottom']) / 2
+                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📉做空 {ob['confidence']}%")
         
         lines.append("")
     
