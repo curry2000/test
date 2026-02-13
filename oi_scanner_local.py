@@ -92,13 +92,13 @@ def format_message(alerts, scanned):
     for a in alerts[:10]:
         oi_dir = "📈" if a.get("oi_change", 0) > 0 else "📉"
         price_dir = "📈" if a["price_change_1h"] > 0 else "📉"
-        surge = "⚡" if a.get("momentum_surge") else ""
+        surge = "🔥" if a.get("aggressive") else ("⚡" if a.get("momentum_surge") else "")
         
         lines.append(f"**{a['symbol']}** ${a['price']:,.4g} {surge}")
         if a.get("oi_change"):
             lines.append(f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a.get('oi', 0))})")
         lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
-        reason = "動能加速！" if a.get("momentum_surge") else a['reason']
+        reason = "積極信號！" if a.get("aggressive") else ("動能加速！" if a.get("momentum_surge") else a['reason'])
         lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {reason}")
         lines.append("")
     
@@ -168,7 +168,15 @@ def filter_new_or_consistent(alerts):
             trend_accelerated = change_24h > prev_24h + 3
             momentum_surge = oi_increased or trend_accelerated
             
-            if time_diff > 3600:
+            price_1h = abs(a.get("price_change_1h", 0))
+            aggressive = oi_change > 10 or price_1h > 5 or (oi_change > 8 and price_1h > 4)
+            
+            if aggressive and signal in ["LONG", "SHORT"]:
+                a["aggressive"] = True
+                filtered.append(a)
+                new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
+                print(f"🔥 {symbol} 積極信號突破冷卻: OI {oi_change:.1f}%, 1H {price_1h:.1f}%")
+            elif time_diff > 3600:
                 if signal == prev_signal:
                     filtered.append(a)
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
