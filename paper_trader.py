@@ -10,9 +10,9 @@ CONFIG = {
     "capital": 10000,
     "position_pct": 10,
     "max_positions": 5,
-    "sl_pct": 4,
-    "tp1_pct": 3,
-    "tp2_pct": 5,
+    "sl_pct": 6,
+    "tp1_pct": 4,
+    "tp2_pct": 7,
     "time_exit_hours": 4
 }
 
@@ -37,18 +37,31 @@ def get_price(symbol):
         return None
 
 def should_open_position(signal, phase, rsi):
-    if "⚠️" in phase:
-        return False, "高位/低位風險"
+    if signal == "LONG":
+        if rsi > 80:
+            return False, "RSI 極度超買"
+        if "⚠️" in phase and rsi > 70:
+            return False, "高位+RSI偏高"
+        if "🌱" in phase:
+            return True, "啟動初期，最佳進場"
+        if "🔥" in phase:
+            return True, "行情中段，順勢進場"
+        if "⚠️" in phase:
+            return True, "高位但趨勢強，輕倉跟進"
+        return True, "符合條件"
     
-    if signal == "LONG" and rsi > 75:
-        return False, "RSI 過高"
-    if signal == "SHORT" and rsi < 25:
-        return False, "RSI 過低"
-    
-    if "🌱" in phase:
-        return True, "啟動初期，最佳進場"
-    if "🔥" in phase:
-        return True, "行情中段，謹慎進場"
+    elif signal == "SHORT":
+        if rsi < 20:
+            return False, "RSI 極度超賣"
+        if "⚠️" in phase and rsi < 30:
+            return False, "低位+RSI偏低"
+        if "🌱" in phase:
+            return True, "啟動初期，最佳進場"
+        if "🔥" in phase:
+            return True, "行情中段，順勢進場"
+        if "⚠️" in phase:
+            return True, "低位但趨勢強，輕倉跟進"
+        return True, "符合條件"
     
     return True, "符合條件"
 
