@@ -2,8 +2,13 @@
   "config": {
     "initial_capital": 10000,
     "position_size_pct": 10,
-    "stop_loss": "nearest support/resistance",
-    "take_profit": "next S/R level or RSI signal",
+    "stop_loss_pct": -4,
+    "tp1_pct": 3,
+    "tp1_size": 0.5,
+    "tp2_pct": 5,
+    "trailing_after_tp1": true,
+    "trailing_pct": 2,
+    "time_exit_hours": 2,
     "entry_signal": "OI scanner (追多/追空)"
   },
   "start_time": "2026-02-13T08:10:00+08:00",
