@@ -1,68 +1,189 @@
 import requests
 import os
+import numpy as np
 from datetime import datetime, timezone, timedelta
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 POSITIONS = [
-    {"name": "BTC 幣本位", "symbol": "BTCUSDT", "entry": 75225, "liquidation": 40336, "strategy": "ADD", "levels": [63000, 59800, 57000]},
-    {"name": "BTC U本位", "symbol": "BTCUSDT", "entry": 86265, "liquidation": 45667, "strategy": "REDUCE", "levels": [72000, 76000, 80000]},
-    {"name": "ETH 幣本位", "symbol": "ETHUSDT", "entry": 2253.98, "liquidation": 1234, "strategy": "ADD", "levels": [1800, 1650, 1500]}
+    {"name": "BTC 幣本位", "symbol": "BTCUSDT", "entry": 73985.4, "liquidation": 40336, "direction": "LONG", "leverage": 20},
+    {"name": "ETH 幣本位", "symbol": "ETHUSDT", "entry": 2227.92, "liquidation": 1234, "direction": "LONG", "leverage": 20},
 ]
 
 def get_price(symbol):
-    base = symbol.replace("USDT", "")
-    
     try:
-        url = f"https://www.okx.com/api/v5/market/ticker?instId={base}-USDT-SWAP"
+        url = f"https://www.okx.com/api/v5/market/ticker?instId={symbol.replace('USDT','')}-USDT-SWAP"
         r = requests.get(url, timeout=10)
         data = r.json()
         if data.get("code") == "0" and data.get("data"):
             return float(data["data"][0]["last"])
     except:
         pass
-    
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={symbol}"
         r = requests.get(url, timeout=10)
-        data = r.json()
-        if data.get("price"):
-            return float(data["price"])
+        return float(r.json().get("price", 0))
     except:
         pass
-    
     return 0
 
-def analyze_position(pos, current_price):
-    if current_price <= 0:
-        return None
-    
+def get_klines(symbol, interval, limit):
+    base = symbol.replace("USDT", "")
+    try:
+        url = f"https://www.okx.com/api/v5/market/candles?instId={base}-USDT-SWAP&bar={interval}&limit={limit}"
+        r = requests.get(url, timeout=15)
+        data = r.json()
+        if data.get("code") == "0" and data.get("data"):
+            return [{"open":float(k[1]),"high":float(k[2]),"low":float(k[3]),"close":float(k[4]),"volume":float(k[5])} for k in reversed(data["data"])]
+    except:
+        pass
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if isinstance(data, list):
+            return [{"open":float(k[1]),"high":float(k[2]),"low":float(k[3]),"close":float(k[4]),"volume":float(k[5])} for k in data]
+    except:
+        pass
+    return []
+
+def calc_rsi(klines):
+    if len(klines) < 15:
+        return 50
+    closes = [k["close"] for k in klines]
+    gains, losses = [], []
+    for i in range(1, min(15, len(closes))):
+        diff = closes[i] - closes[i-1]
+        gains.append(diff if diff > 0 else 0)
+        losses.append(-diff if diff < 0 else 0)
+    avg_gain = sum(gains) / len(gains)
+    avg_loss = sum(losses) / len(losses) if sum(losses) > 0 else 0.001
+    return 100 - (100 / (1 + avg_gain / avg_loss))
+
+def find_obs(klines, current):
+    bull, bear = [], []
+    for i in range(2, len(klines)-1):
+        prev, curr, nxt = klines[i-1], klines[i], klines[i+1]
+        if prev["close"] < prev["open"] and curr["close"] > curr["open"] and nxt["close"] > nxt["open"]:
+            if nxt["close"] > prev["open"] and current > prev["close"]:
+                bull.append({"top": prev["open"], "bottom": prev["close"]})
+        if prev["close"] > prev["open"] and curr["close"] < curr["open"] and nxt["close"] < nxt["open"]:
+            if nxt["close"] < prev["open"] and current < prev["close"]:
+                bear.append({"top": prev["close"], "bottom": prev["open"]})
+    return bull, bear
+
+def analyze_levels(symbol):
+    result = {}
+    for interval, label in [("1h","1H"), ("4h","4H"), ("1d","1D")]:
+        klines = get_klines(symbol, interval if "h" in interval else "1D", 100)
+        if not klines:
+            continue
+        current = klines[-1]["close"]
+        rsi = calc_rsi(klines)
+        bull, bear = find_obs(klines, current)
+        
+        recent = klines[-24:] if len(klines) >= 24 else klines
+        support = min(k["low"] for k in recent)
+        resistance = max(k["high"] for k in recent)
+        
+        result[label] = {
+            "rsi": rsi,
+            "support": support,
+            "resistance": resistance,
+            "bull_ob": bull[-1] if bull else None,
+            "bear_ob": bear[-1] if bear else None
+        }
+    return result
+
+def get_action_advice(pos, price, levels):
     entry = pos["entry"]
-    pnl_pct = ((current_price - entry) / entry) * 100
     liq = pos["liquidation"]
-    liq_distance = ((current_price - liq) / current_price) * 100
+    pnl_pct = (price - entry) / entry * 100
+    liq_dist = (price - liq) / price * 100
     
-    if pos["strategy"] == "ADD":
-        action_levels = [l for l in pos["levels"] if current_price > l]
-        next_level = min(action_levels) if action_levels else None
-        action = "補倉"
-    else:
-        action_levels = [l for l in pos["levels"] if current_price < l]
-        next_level = max(action_levels) if action_levels else None
-        action = "減倉"
-    
-    if liq_distance < 20:
+    if liq_dist < 20:
         risk = "🔴高風險"
-    elif liq_distance < 35:
+    elif liq_dist < 35:
         risk = "🟡中風險"
     else:
         risk = "🟢低風險"
     
+    advice = []
+    
+    rsi_4h = levels.get("4H", {}).get("rsi", 50)
+    rsi_1h = levels.get("1H", {}).get("rsi", 50)
+    
+    bull_1h = levels.get("1H", {}).get("bull_ob")
+    bull_4h = levels.get("4H", {}).get("bull_ob")
+    bear_1h = levels.get("1H", {}).get("bear_ob")
+    bear_4h = levels.get("4H", {}).get("bear_ob")
+    
+    add_zone = None
+    if bull_4h:
+        mid = (bull_4h["top"] + bull_4h["bottom"]) / 2
+        dist = (price - mid) / price * 100
+        if dist < 3:
+            add_zone = bull_4h
+            advice.append(f"📍 接近4H OB支撐 ${bull_4h['bottom']:,.0f}-${bull_4h['top']:,.0f}，可小量補倉")
+        elif dist < 5:
+            add_zone = bull_4h
+            advice.append(f"👀 4H OB支撐在 ${bull_4h['bottom']:,.0f}-${bull_4h['top']:,.0f}，等回調到此區再補")
+    
+    if bull_1h and not add_zone:
+        mid = (bull_1h["top"] + bull_1h["bottom"]) / 2
+        dist = (price - mid) / price * 100
+        if dist < 2:
+            advice.append(f"📍 接近1H OB支撐 ${bull_1h['bottom']:,.0f}-${bull_1h['top']:,.0f}，可小量補倉")
+    
+    stop_zone = None
+    if bull_4h:
+        stop_zone = bull_4h["bottom"]
+        advice.append(f"🛑 止損參考: 跌破 ${bull_4h['bottom']:,.0f} (4H OB破)")
+    elif bull_1h:
+        stop_zone = bull_1h["bottom"]
+        advice.append(f"🛑 止損參考: 跌破 ${bull_1h['bottom']:,.0f} (1H OB破)")
+    
+    tp_zone = None
+    if bear_1h:
+        tp_zone = bear_1h
+        dist = abs(price - bear_1h["bottom"]) / price * 100
+        if dist < 2:
+            advice.append(f"⚠️ 接近1H壓力 ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f}，考慮部分減倉鎖利")
+        else:
+            advice.append(f"🎯 上方壓力: ${bear_1h['bottom']:,.0f}-${bear_1h['top']:,.0f}")
+    
+    if bear_4h:
+        advice.append(f"🎯 4H壓力: ${bear_4h['bottom']:,.0f}-${bear_4h['top']:,.0f}")
+    
+    if rsi_4h < 25:
+        advice.append("📊 4H RSI超賣，可能反彈")
+    elif rsi_4h > 75:
+        advice.append("📊 4H RSI超買，小心回調")
+    
+    if rsi_1h < 30:
+        advice.append("📊 1H RSI超賣，短線可能反彈")
+    elif rsi_1h > 70:
+        advice.append("📊 1H RSI超買，短線注意回調")
+    
+    if pnl_pct > -3:
+        advice.append("💡 接近回本，耐心持有")
+    elif pnl_pct > -10:
+        advice.append("💡 虧損可控，等待反彈")
+    else:
+        advice.append("💡 虧損較大，嚴格控制風險")
+    
     return {
-        "name": pos["name"], "price": current_price, "entry": entry,
-        "pnl_pct": pnl_pct, "liq": liq, "liq_distance": liq_distance,
-        "strategy": pos["strategy"], "action": action, "next_level": next_level,
-        "levels": pos["levels"], "risk": risk
+        "name": pos["name"],
+        "price": price,
+        "entry": entry,
+        "pnl_pct": pnl_pct,
+        "liq": liq,
+        "liq_dist": liq_dist,
+        "risk": risk,
+        "rsi_1h": rsi_1h,
+        "rsi_4h": rsi_4h,
+        "advice": advice,
+        "levels": levels
     }
 
 def format_message(results):
@@ -73,13 +194,26 @@ def format_message(results):
     
     for r in results:
         pnl_emoji = "🟢" if r["pnl_pct"] >= 0 else "🔴"
-        strategy_text = "補倉" if r["strategy"] == "ADD" else "減倉"
-        levels_text = " / ".join([f"${l:,}" for l in r["levels"]])
         
-        lines.append(f"**{r['name']}** | {pnl_emoji}{r['pnl_pct']:+.1f}% | {r['risk']}")
-        lines.append(f"現價 ${r['price']:,.2f} → 入場 ${r['entry']:,.2f} → 清算 ${r['liq']:,.0f}")
-        lines.append(f"{strategy_text}: {levels_text}")
+        lines.append(f"**{r['name']}** {pnl_emoji}{r['pnl_pct']:+.1f}% | {r['risk']}")
+        lines.append(f"現價 ${r['price']:,.2f} | 均價 ${r['entry']:,.2f} | 清算 ${r['liq']:,.0f} ({r['liq_dist']:.0f}%)")
+        lines.append(f"RSI → 1H: {r['rsi_1h']:.0f} | 4H: {r['rsi_4h']:.0f}")
         
+        for tf in ["1H", "4H", "1D"]:
+            lv = r["levels"].get(tf, {})
+            bull = lv.get("bull_ob")
+            bear = lv.get("bear_ob")
+            parts = []
+            if bull:
+                parts.append(f"🟢${bull['bottom']:,.0f}-${bull['top']:,.0f}")
+            if bear:
+                parts.append(f"🔴${bear['bottom']:,.0f}-${bear['top']:,.0f}")
+            if parts:
+                lines.append(f"  [{tf}] {' | '.join(parts)}")
+        
+        lines.append("")
+        for a in r["advice"]:
+            lines.append(f"  {a}")
         lines.append("")
     
     return "\n".join(lines)
@@ -106,9 +240,10 @@ def main():
     for pos in POSITIONS:
         price = prices.get(pos["symbol"], 0)
         if price > 0:
-            result = analyze_position(pos, price)
-            if result:
-                results.append(result)
+            print(f"分析 {pos['name']}...")
+            levels = analyze_levels(pos["symbol"])
+            result = get_action_advice(pos, price, levels)
+            results.append(result)
     
     if results:
         message = format_message(results)
