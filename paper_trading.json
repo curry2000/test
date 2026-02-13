@@ -1,0 +1,23 @@
+{
+  "config": {
+    "initial_capital": 10000,
+    "position_size_pct": 10,
+    "stop_loss": "nearest support/resistance",
+    "take_profit": "next S/R level or RSI signal",
+    "entry_signal": "OI scanner (追多/追空)"
+  },
+  "start_time": "2026-02-13T08:10:00+08:00",
+  "end_time": "2026-02-13T14:10:00+08:00",
+  "capital": 10000,
+  "trades": [],
+  "open_positions": [],
+  "closed_trades": [],
+  "summary": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0,
+    "total_pnl": 0,
+    "return_pct": 0
+  }
+}

@@ -275,10 +275,25 @@ def analyze_symbol(symbol):
             ob["confidence"] = get_confidence(ob)
             all_obs.append(ob)
     
-    bullish_obs = sorted([ob for ob in all_obs if ob["type"] == "bullish" and ob["distance"] > 0],
+    bullish_obs = sorted([ob for ob in all_obs if ob["type"] == "bullish" and current_price > ob["top"]],
                         key=lambda x: x["distance"])[:3]
-    bearish_obs = sorted([ob for ob in all_obs if ob["type"] == "bearish" and ob["distance"] < 0],
+    bearish_obs = sorted([ob for ob in all_obs if ob["type"] == "bearish" and current_price < ob["bottom"]],
                         key=lambda x: abs(x["distance"]))[:3]
+    
+    def dedupe_obs(obs_list, min_gap_pct=1.5):
+        if not obs_list:
+            return []
+        result = [obs_list[0]]
+        for ob in obs_list[1:]:
+            last_mid = (result[-1]["top"] + result[-1]["bottom"]) / 2
+            this_mid = (ob["top"] + ob["bottom"]) / 2
+            gap = abs(this_mid - last_mid) / current_price * 100
+            if gap >= min_gap_pct:
+                result.append(ob)
+        return result
+    
+    bullish_obs = dedupe_obs(bullish_obs)
+    bearish_obs = dedupe_obs(bearish_obs)
     
     highs = [k["high"] for k in klines_1h] if klines_1h else [current_price]
     lows = [k["low"] for k in klines_1h] if klines_1h else [current_price]
