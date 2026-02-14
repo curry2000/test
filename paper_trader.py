@@ -37,6 +37,28 @@ def get_price(symbol):
     except:
         return None
 
+def get_dynamic_tp(strength_grade="", vol_ratio=1.0):
+    if "S" in strength_grade:
+        tp1, tp2, sl = 3, 7, 4
+    elif "A" in strength_grade:
+        tp1, tp2, sl = 2, 4, 5
+    elif "B" in strength_grade:
+        tp1, tp2, sl = 3, 5, 6
+    else:
+        tp1, tp2, sl = 5, 10, 10
+    
+    if vol_ratio >= 3:
+        tp1 *= 1.5
+        tp2 *= 1.8
+    elif vol_ratio >= 2:
+        tp1 *= 1.3
+        tp2 *= 1.5
+    elif vol_ratio >= 1.5:
+        tp1 *= 1.1
+        tp2 *= 1.2
+    
+    return round(tp1, 1), round(tp2, 1), sl
+
 def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0):
     if signal == "LONG":
         if rsi >= 80 and "⚠️" in phase:
@@ -68,14 +90,16 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
     
     position_size = state["capital"] * CONFIG["position_pct"] / 100 * CONFIG["leverage"]
     
+    tp1_pct, tp2_pct, sl_pct = get_dynamic_tp(strength_grade, vol_ratio)
+    
     if signal == "LONG":
-        sl = entry_price * (1 - CONFIG["sl_pct"] / 100)
-        tp1 = entry_price * (1 + CONFIG["tp1_pct"] / 100)
-        tp2 = entry_price * (1 + CONFIG["tp2_pct"] / 100)
+        sl = entry_price * (1 - sl_pct / 100)
+        tp1 = entry_price * (1 + tp1_pct / 100)
+        tp2 = entry_price * (1 + tp2_pct / 100)
     else:
-        sl = entry_price * (1 + CONFIG["sl_pct"] / 100)
-        tp1 = entry_price * (1 - CONFIG["tp1_pct"] / 100)
-        tp2 = entry_price * (1 - CONFIG["tp2_pct"] / 100)
+        sl = entry_price * (1 + sl_pct / 100)
+        tp1 = entry_price * (1 - tp1_pct / 100)
+        tp2 = entry_price * (1 - tp2_pct / 100)
     
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
