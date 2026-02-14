@@ -2,7 +2,7 @@
   "BTC": {
     "bullish": [
       {
-        "key": "4H_66970_68390",
+        "key": "15M_68830_68962",
         "touched": false
       }
     ],
@@ -12,11 +12,7 @@
   "ETH": {
     "bullish": [
       {
-        "key": "4H_1994_2030",
-        "touched": false
-      },
-      {
-        "key": "4H_1937_2010",
+        "key": "15M_2052_2058",
         "touched": false
       }
     ],

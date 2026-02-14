@@ -327,7 +327,10 @@ if __name__ == "__main__":
         if sys.argv[1] == "check":
             check_and_close()
         elif sys.argv[1] == "status":
-            print(show_status())
+            result = show_status()
+            print(result)
+            if "--send" in sys.argv:
+                send_discord(result)
         elif sys.argv[1] == "reset":
             save_state({"positions": [], "closed": [], "capital": CONFIG["capital"]})
             print("已重置")
