@@ -140,6 +140,86 @@ def detect_early_momentum(symbol):
         pass
     return None
 
+FLASH_STATE = os.path.expanduser("~/.openclaw/flash_crash_state.json")
+
+def detect_flash_crash(symbols_data):
+    flash_state = load_json(FLASH_STATE)
+    if not isinstance(flash_state, dict):
+        flash_state = {}
+    
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    crashes = []
+    
+    for sym_data in symbols_data:
+        symbol = sym_data["symbol"]
+        base = symbol.replace("USDT", "")
+        try:
+            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=13"
+            r = requests.get(url, timeout=5)
+            data = r.json()
+            if not isinstance(data, list) or len(data) < 13:
+                continue
+            
+            volumes = [float(k[7]) for k in data[:-1]]
+            avg_vol = sum(volumes) / len(volumes) if volumes else 0
+            
+            latest = data[-1]
+            latest_vol = float(latest[7])
+            latest_open = float(latest[1])
+            latest_close = float(latest[4])
+            latest_low = float(latest[3])
+            
+            drop = (latest_close - latest_open) / latest_open * 100 if latest_open > 0 else 0
+            wick_drop = (latest_low - latest_open) / latest_open * 100 if latest_open > 0 else 0
+            vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 0
+            
+            is_crash = drop <= -5 and vol_ratio >= 5
+            is_hard_crash = wick_drop <= -8 and vol_ratio >= 3
+            
+            if is_crash or is_hard_crash:
+                prev_ts = flash_state.get(base, {}).get("ts", "2000-01-01T00:00:00")
+                prev_time = datetime.fromisoformat(prev_ts)
+                if hasattr(prev_time, 'tzinfo') and prev_time.tzinfo is None:
+                    prev_time = prev_time.replace(tzinfo=tw_tz)
+                time_diff = (now - prev_time).total_seconds()
+                
+                if time_diff > 600:
+                    crash_type = "硬閃崩" if is_hard_crash and wick_drop <= -8 else "閃崩"
+                    crashes.append({
+                        "symbol": base,
+                        "price": latest_close,
+                        "drop": drop,
+                        "wick_drop": wick_drop,
+                        "vol_ratio": vol_ratio,
+                        "type": crash_type
+                    })
+                    flash_state[base] = {"ts": now.isoformat(), "drop": drop}
+        except:
+            continue
+    
+    save_json(FLASH_STATE, flash_state)
+    return crashes
+
+def send_flash_alerts(crashes):
+    if not crashes:
+        return
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
+    
+    lines = [f"💥 **閃崩警報** | {now}", ""]
+    for c in crashes:
+        emoji = "🔻🔻" if c["wick_drop"] <= -8 else "🔻"
+        lines.append(f"{emoji} **{c['symbol']}** ${c['price']:.4f}" if c['price'] < 1 else f"{emoji} **{c['symbol']}** ${c['price']:,.2f}")
+        lines.append(f"  5分鐘跌幅: {c['drop']:+.1f}% (最低: {c['wick_drop']:+.1f}%)")
+        lines.append(f"  成交量: {c['vol_ratio']:.1f}x 爆量 | 類型: {c['type']}")
+        lines.append(f"  ⚠️ 可能繼續下殺或洗盤反彈")
+        lines.append("")
+    
+    msg = "\n".join(lines)
+    print("\n" + msg)
+    send_discord(msg)
+
 def get_market_phase(symbol):
     try:
         url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=26"
@@ -523,6 +603,13 @@ def main():
     
     high_vol_coins = sorted(tickers, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
     early_alerts = []
+    
+    print("掃描閃崩信號...")
+    flash_candidates = [{"symbol": t["symbol"]} for t in high_vol_coins[:100]]
+    crashes = detect_flash_crash(flash_candidates)
+    if crashes:
+        print(f"💥 偵測到 {len(crashes)} 個閃崩!")
+        send_flash_alerts(crashes)
     
     print("掃描早期動能信號...")
     for t in high_vol_coins[:30]:
