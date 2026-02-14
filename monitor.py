@@ -497,16 +497,34 @@ def format_message(analyses):
         if a["bullish_obs"]:
             for ob in a["bullish_obs"][:2]:
                 mid = (ob['top'] + ob['bottom']) / 2
+                ob_range = ob['top'] - ob['bottom']
+                entry = mid
+                sl = ob['bottom'] - ob_range * 0.3
+                risk = entry - sl
+                tp1 = entry + risk * 1.5
+                tp2 = entry + risk * 2.5
+                tp3 = entry + risk * 4.0
+                rr = (tp2 - entry) / risk if risk > 0 else 0
                 vol_tag = f" 📊{ob['vol_ratio']:.1f}x" if ob.get('vol_ratio', 0) > 1.2 else ""
                 fvg_tag = " ⚡FVG" if ob.get('fvg') else ""
                 lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📈做多 {ob['confidence']}%{vol_tag}{fvg_tag}")
+                lines.append(f"  📍 入場 ${entry:,.0f} | SL ${sl:,.0f} | TP1 ${tp1:,.0f}(40%) | TP2 ${tp2:,.0f}(30%) | TP3 ${tp3:,.0f}(30%) | {rr:.1f}R")
         
         if a["bearish_obs"]:
             for ob in a["bearish_obs"][:2]:
                 mid = (ob['top'] + ob['bottom']) / 2
+                ob_range = ob['top'] - ob['bottom']
+                entry = mid
+                sl = ob['top'] + ob_range * 0.3
+                risk = sl - entry
+                tp1 = entry - risk * 1.5
+                tp2 = entry - risk * 2.5
+                tp3 = entry - risk * 4.0
+                rr = (entry - tp2) / risk if risk > 0 else 0
                 vol_tag = f" 📊{ob['vol_ratio']:.1f}x" if ob.get('vol_ratio', 0) > 1.2 else ""
                 fvg_tag = " ⚡FVG" if ob.get('fvg') else ""
                 lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📉做空 {ob['confidence']}%{vol_tag}{fvg_tag}")
+                lines.append(f"  📍 入場 ${entry:,.0f} | SL ${sl:,.0f} | TP1 ${tp1:,.0f}(40%) | TP2 ${tp2:,.0f}(30%) | TP3 ${tp3:,.0f}(30%) | {rr:.1f}R")
         
         if a.get("bullish_fvgs") or a.get("bearish_fvgs"):
             for fvg in a.get("bullish_fvgs", [])[:1]:
