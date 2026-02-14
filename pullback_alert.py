@@ -5,6 +5,16 @@ from datetime import datetime, timezone, timedelta
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = os.path.expanduser("~/.openclaw/pullback_state.json")
+CHANNEL_ID = "1471200792945098955"
+
+def get_bot_token():
+    try:
+        import json
+        with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
+            config = json.load(f)
+        return config.get("channels", {}).get("discord", {}).get("token", "")
+    except:
+        return ""
 
 def load_state():
     try:
@@ -18,13 +28,30 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
-def send_discord(message):
+def send_discord(message, pin=False):
     if not DISCORD_WEBHOOK:
         print("No webhook")
         return
     try:
         r = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
         print(f"Discord: {r.status_code}")
+        
+        if pin and r.status_code == 204:
+            bot_token = get_bot_token()
+            if bot_token:
+                msgs = requests.get(
+                    f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages?limit=1",
+                    headers={"Authorization": f"Bot {bot_token}"},
+                    timeout=10
+                ).json()
+                if msgs and len(msgs) > 0:
+                    msg_id = msgs[0]["id"]
+                    pin_r = requests.put(
+                        f"https://discord.com/api/v10/channels/{CHANNEL_ID}/pins/{msg_id}",
+                        headers={"Authorization": f"Bot {bot_token}"},
+                        timeout=10
+                    )
+                    print(f"Pin: {pin_r.status_code}")
     except Exception as e:
         print(f"Error: {e}")
 
@@ -234,7 +261,7 @@ def main():
                 f"• 🎯 可考慮加倉"
             )
             print(msg)
-            send_discord(msg)
+            send_discord(msg, pin=True)
             state[key] = now.isoformat()
     
     save_state(state)
