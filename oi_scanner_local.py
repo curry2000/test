@@ -266,22 +266,44 @@ def get_signal_strength(oi_change, vol_ratio, rsi, signal, price_change_1h):
     
     return {"score": score, "grade": grade, "tags": tags}
 
+def get_spot_cvd(symbol, periods=6):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=5m&limit={periods}"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if isinstance(data, list) and len(data) >= 3:
+            cvd = 0
+            for k in data:
+                buy_vol = float(k[9])
+                sell_vol = float(k[5]) - buy_vol
+                cvd += (buy_vol - sell_vol)
+            return cvd
+    except:
+        pass
+    return None
+
 def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 5 and price_change_1h > 3:
-        return "LONG", "新多進場，趨勢向上"
+        return "LONG", "強勢建倉"
     elif oi_change > 5 and price_change_1h < -3:
-        return "SHORT", "新空進場，趨勢向下"
-    elif oi_change < -5 and price_change_1h > 3:
-        return "WAIT", "軋空反彈，動能不足"
+        return "SHORT", "主動砸盤"
     elif oi_change < -5 and price_change_1h < -3:
-        return "WAIT", "多頭平倉，恐慌拋售"
+        return "SHAKEOUT", "多頭洗盤"
+    elif oi_change < -5 and price_change_1h > 3:
+        return "SQUEEZE", "空頭擠壓"
     elif abs(oi_change) > 8 and abs(price_change_1h) < 2:
         return "PENDING", "多空對峙，即將變盤"
     else:
         return "NONE", ""
 
 def signal_emoji(signal):
-    return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "EARLY_LONG": "⚡ 早期做多", "EARLY_SHORT": "⚡ 早期做空", "NONE": "⚪ 無訊號"}.get(signal, signal)
+    return {
+        "LONG": "🟢 強勢建倉", "SHORT": "🔴 主動砸盤",
+        "SHAKEOUT": "🟣 多頭洗盤", "SQUEEZE": "🟡 空頭擠壓",
+        "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢",
+        "EARLY_LONG": "⚡ 早期做多", "EARLY_SHORT": "⚡ 早期做空",
+        "NONE": "⚪ 無訊號"
+    }.get(signal, signal)
 
 def format_message(alerts, scanned):
     tw_tz = timezone(timedelta(hours=8))
@@ -323,6 +345,7 @@ def format_message(alerts, scanned):
         rsi = a.get("rsi", 0)
         grade = a.get("strength_grade", "")
         tags = a.get("strength_tags", [])
+        cvd_tag = a.get("cvd_tag", "")
         
         signal_line = f"• 訊號: {signal_emoji(a['signal'])}"
         if phase:
@@ -331,6 +354,8 @@ def format_message(alerts, scanned):
             signal_line += f" | {grade}"
         if rsi:
             signal_line += f" | RSI: {rsi:.0f}"
+        if cvd_tag:
+            signal_line += f" | {cvd_tag}"
         lines.append(signal_line)
         
         if tags:
@@ -358,7 +383,7 @@ def log_signals(alerts):
         logs = []
     
     for a in alerts:
-        if a["signal"] in ["LONG", "SHORT"]:
+        if a["signal"] in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"]:
             logs.append({
                 "ts": timestamp,
                 "symbol": a["symbol"],
@@ -371,6 +396,7 @@ def log_signals(alerts):
                 "rsi": a.get("rsi", 50),
                 "strength_score": a.get("strength_score", 0),
                 "strength_grade": a.get("strength_grade", ""),
+                "cvd_tag": a.get("cvd_tag", ""),
                 "source": "binance"
             })
     
@@ -526,11 +552,30 @@ def main():
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
-        if signal in ["LONG", "SHORT"]:
+        if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"]:
             phase = get_market_phase(symbol)
-            phase_label = get_phase_label(phase, signal)
+            phase_label = get_phase_label(phase, signal if signal in ["LONG","SHORT"] else ("LONG" if signal=="SQUEEZE" else "SHORT"))
             rsi_val = phase["rsi"] if phase else 50
             vol_1h = get_1h_volume_ratio(base)
+            cvd = get_spot_cvd(base)
+            
+            cvd_tag = ""
+            if cvd is not None:
+                if signal == "LONG" and cvd < 0:
+                    cvd_tag = "⚠️CVD背離"
+                elif signal == "SHORT" and cvd > 0:
+                    cvd_tag = "⚠️CVD背離"
+                elif signal == "LONG" and cvd > 0:
+                    cvd_tag = "✅CVD確認"
+                elif signal == "SHORT" and cvd < 0:
+                    cvd_tag = "✅CVD確認"
+            
+            effective_signal = signal
+            if signal == "SHAKEOUT":
+                effective_signal = "SHAKEOUT"
+            elif signal == "SQUEEZE":
+                effective_signal = "SQUEEZE"
+            
             strength = get_signal_strength(oi_change, vol_1h, rsi_val, signal, price_change_1h)
             alerts.append({
                 "symbol": base,
@@ -539,11 +584,12 @@ def main():
                 "oi_change": oi_change,
                 "price_change_1h": price_change_1h,
                 "change_24h": coin["change_24h"],
-                "signal": signal,
+                "signal": effective_signal,
                 "reason": reason,
                 "phase": phase_label,
                 "rsi": rsi_val,
                 "1h_vol_ratio": vol_1h,
+                "cvd_tag": cvd_tag,
                 "strength_score": strength["score"],
                 "strength_grade": strength["grade"],
                 "strength_tags": strength["tags"]
