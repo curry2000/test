@@ -10,7 +10,7 @@ CONFIG = {
     "capital": 10000,
     "position_pct": 10,
     "max_positions": 5,
-    "sl_pct": 8,
+    "sl_pct": 10,
     "tp1_pct": 5,
     "tp2_pct": 10,
     "time_exit_hours": 6
@@ -45,13 +45,23 @@ def should_open_position(signal, phase, rsi):
         if "🔥" in phase:
             return True, "行情中段，順勢進場"
         if "⚠️" in phase:
-            if rsi < 60:
+            if rsi < 65:
                 return True, "高位但RSI未過熱"
             return False, "高位+RSI偏高"
         return True, "符合條件"
     
     elif signal == "SHORT":
-        return False, "暫停做空（複盤顯示方向錯誤率高）"
+        if rsi < 20:
+            return False, "RSI 極度超賣"
+        if "🌱" in phase:
+            return True, "啟動初期，最佳進場"
+        if "🔥" in phase:
+            return True, "行情中段，順勢進場"
+        if "⚠️" in phase:
+            if rsi > 35:
+                return True, "低位但RSI未過冷"
+            return False, "低位+RSI偏低"
+        return True, "符合條件"
     
     return True, "符合條件"
 
