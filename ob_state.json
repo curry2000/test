@@ -33,12 +33,7 @@
         "touched": false
       }
     ],
-    "bearish": [
-      {
-        "key": "15M_2075_2084",
-        "touched": false
-      }
-    ],
+    "bearish": [],
     "alerts": []
   }
 }

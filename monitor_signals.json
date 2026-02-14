@@ -4003,5 +4003,473 @@
     "entry_price": 2070.0,
     "confidence": 75,
     "rsi_1h": 58.01628786370974
+  },
+  {
+    "ts": "2026-02-15T00:26:39.797677+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69422.6,
+    "confidence": 63,
+    "rsi_1h": 56.5304301400886
+  },
+  {
+    "ts": "2026-02-15T00:26:39.797677+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69422.6,
+    "confidence": 40,
+    "rsi_1h": 56.5304301400886
+  },
+  {
+    "ts": "2026-02-15T00:26:39.797677+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2071.28,
+    "confidence": 35,
+    "rsi_1h": 58.59244269241825
+  },
+  {
+    "ts": "2026-02-15T00:26:39.797677+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2071.28,
+    "confidence": 75,
+    "rsi_1h": 58.59244269241825
+  },
+  {
+    "ts": "2026-02-15T00:31:42.689668+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69296.5,
+    "confidence": 63,
+    "rsi_1h": 54.68176278341626
+  },
+  {
+    "ts": "2026-02-15T00:31:42.689668+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69296.5,
+    "confidence": 40,
+    "rsi_1h": 54.68176278341626
+  },
+  {
+    "ts": "2026-02-15T00:31:42.689668+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2067.98,
+    "confidence": 35,
+    "rsi_1h": 57.12974188585894
+  },
+  {
+    "ts": "2026-02-15T00:31:42.689668+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2067.98,
+    "confidence": 75,
+    "rsi_1h": 57.12974188585894
+  },
+  {
+    "ts": "2026-02-15T00:36:45.292068+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69485.9,
+    "confidence": 63,
+    "rsi_1h": 57.50636494287311
+  },
+  {
+    "ts": "2026-02-15T00:36:45.292068+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69485.9,
+    "confidence": 40,
+    "rsi_1h": 57.50636494287311
+  },
+  {
+    "ts": "2026-02-15T00:36:45.292068+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2075.56,
+    "confidence": 35,
+    "rsi_1h": 60.60491980042699
+  },
+  {
+    "ts": "2026-02-15T00:36:45.292068+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2075.56,
+    "confidence": 83,
+    "rsi_1h": 60.60491980042699
+  },
+  {
+    "ts": "2026-02-15T00:41:47.776451+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69495.5,
+    "confidence": 63,
+    "rsi_1h": 57.65732446909843
+  },
+  {
+    "ts": "2026-02-15T00:41:47.776451+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69495.5,
+    "confidence": 40,
+    "rsi_1h": 57.65732446909843
+  },
+  {
+    "ts": "2026-02-15T00:41:47.776451+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2074.35,
+    "confidence": 35,
+    "rsi_1h": 60.02208958711728
+  },
+  {
+    "ts": "2026-02-15T00:41:47.776451+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2074.35,
+    "confidence": 75,
+    "rsi_1h": 60.02208958711728
+  },
+  {
+    "ts": "2026-02-15T00:42:17.186934+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69511.9,
+    "confidence": 63,
+    "rsi_1h": 57.82969012572074
+  },
+  {
+    "ts": "2026-02-15T00:42:17.186934+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69511.9,
+    "confidence": 40,
+    "rsi_1h": 57.82969012572074
+  },
+  {
+    "ts": "2026-02-15T00:42:17.186934+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2074.85,
+    "confidence": 35,
+    "rsi_1h": 60.261564050930126
+  },
+  {
+    "ts": "2026-02-15T00:42:17.186934+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2074.85,
+    "confidence": 75,
+    "rsi_1h": 60.261564050930126
+  },
+  {
+    "ts": "2026-02-15T00:42:23.950905+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69495.5,
+    "confidence": 63,
+    "rsi_1h": 57.62423438750688
+  },
+  {
+    "ts": "2026-02-15T00:42:23.950905+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69495.5,
+    "confidence": 40,
+    "rsi_1h": 57.62423438750688
+  },
+  {
+    "ts": "2026-02-15T00:42:23.950905+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2074.47,
+    "confidence": 35,
+    "rsi_1h": 60.07938971145596
+  },
+  {
+    "ts": "2026-02-15T00:42:23.950905+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2074.47,
+    "confidence": 75,
+    "rsi_1h": 60.07938971145596
+  },
+  {
+    "ts": "2026-02-15T00:42:25.335108+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69493.4,
+    "confidence": 63,
+    "rsi_1h": 57.62423438750688
+  },
+  {
+    "ts": "2026-02-15T00:42:25.335108+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69493.4,
+    "confidence": 40,
+    "rsi_1h": 57.62423438750688
+  },
+  {
+    "ts": "2026-02-15T00:42:25.335108+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2074.47,
+    "confidence": 35,
+    "rsi_1h": 60.07938971145596
+  },
+  {
+    "ts": "2026-02-15T00:42:25.335108+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2074.47,
+    "confidence": 75,
+    "rsi_1h": 60.07938971145596
+  },
+  {
+    "ts": "2026-02-15T00:43:39.429947+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69550.8,
+    "confidence": 63,
+    "rsi_1h": 58.54258355069696
+  },
+  {
+    "ts": "2026-02-15T00:43:39.429947+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69550.8,
+    "confidence": 40,
+    "rsi_1h": 58.54258355069696
+  },
+  {
+    "ts": "2026-02-15T00:43:39.429947+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2075.97,
+    "confidence": 35,
+    "rsi_1h": 60.67308609661977
+  },
+  {
+    "ts": "2026-02-15T00:43:39.429947+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 2075.97,
+    "confidence": 83,
+    "rsi_1h": 60.67308609661977
+  },
+  {
+    "ts": "2026-02-15T00:46:51.279780+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69564.1,
+    "confidence": 63,
+    "rsi_1h": 58.75956418823468
+  },
+  {
+    "ts": "2026-02-15T00:46:51.279780+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69564.1,
+    "confidence": 90,
+    "rsi_1h": 58.75956418823468
+  },
+  {
+    "ts": "2026-02-15T00:46:51.279780+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2078.13,
+    "confidence": 35,
+    "rsi_1h": 61.881174179004404
+  },
+  {
+    "ts": "2026-02-15T00:46:51.279780+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 2078.13,
+    "confidence": 55,
+    "rsi_1h": 61.881174179004404
+  },
+  {
+    "ts": "2026-02-15T00:48:49.824502+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69596.2,
+    "confidence": 63,
+    "rsi_1h": 59.28993974035491
+  },
+  {
+    "ts": "2026-02-15T00:48:49.824502+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69596.2,
+    "confidence": 90,
+    "rsi_1h": 59.28993974035491
+  },
+  {
+    "ts": "2026-02-15T00:48:49.824502+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2078.51,
+    "confidence": 35,
+    "rsi_1h": 62.202276221321505
+  },
+  {
+    "ts": "2026-02-15T00:48:49.824502+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 2078.51,
+    "confidence": 55,
+    "rsi_1h": 62.202276221321505
+  },
+  {
+    "ts": "2026-02-15T00:48:55.147129+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69603.0,
+    "confidence": 63,
+    "rsi_1h": 59.403524751787124
+  },
+  {
+    "ts": "2026-02-15T00:48:55.147129+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69603.0,
+    "confidence": 90,
+    "rsi_1h": 59.403524751787124
+  },
+  {
+    "ts": "2026-02-15T00:48:55.147129+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2078.95,
+    "confidence": 35,
+    "rsi_1h": 62.299771599467526
+  },
+  {
+    "ts": "2026-02-15T00:48:55.147129+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 2078.95,
+    "confidence": 55,
+    "rsi_1h": 62.299771599467526
+  },
+  {
+    "ts": "2026-02-15T00:48:56.439482+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69603.1,
+    "confidence": 63,
+    "rsi_1h": 59.403524751787124
+  },
+  {
+    "ts": "2026-02-15T00:48:56.439482+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69603.1,
+    "confidence": 90,
+    "rsi_1h": 59.403524751787124
+  },
+  {
+    "ts": "2026-02-15T00:48:56.439482+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2078.95,
+    "confidence": 35,
+    "rsi_1h": 62.294632644893575
+  },
+  {
+    "ts": "2026-02-15T00:48:56.439482+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 2078.95,
+    "confidence": 55,
+    "rsi_1h": 62.294632644893575
+  },
+  {
+    "ts": "2026-02-15T00:51:55.495322+08:00",
+    "symbol": "BTC",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 69555.8,
+    "confidence": 63,
+    "rsi_1h": 58.623966979111074
+  },
+  {
+    "ts": "2026-02-15T00:51:55.495322+08:00",
+    "symbol": "BTC",
+    "signal": "SHORT",
+    "trigger": "OB",
+    "entry_price": 69555.8,
+    "confidence": 40,
+    "rsi_1h": 58.623966979111074
+  },
+  {
+    "ts": "2026-02-15T00:51:55.495322+08:00",
+    "symbol": "ETH",
+    "signal": "LONG",
+    "trigger": "OB",
+    "entry_price": 2078.89,
+    "confidence": 35,
+    "rsi_1h": 62.268950583771165
+  },
+  {
+    "ts": "2026-02-15T00:51:55.495322+08:00",
+    "symbol": "ETH",
+    "signal": "SHORT",
+    "trigger": "RESISTANCE",
+    "entry_price": 2078.89,
+    "confidence": 55,
+    "rsi_1h": 62.268950583771165
   }
 ]
