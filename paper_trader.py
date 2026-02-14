@@ -36,22 +36,31 @@ def get_price(symbol):
     except:
         return None
 
-def should_open_position(signal, phase, rsi):
+def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0):
+    if "⚠️" in phase:
+        return False, f"⚠️ 高位追高/低位追空，跳過"
+    
     if signal == "LONG":
-        if rsi >= 60:
-            return True, f"RSI {rsi:.0f} 強勢追多"
         if "🌱" in phase:
-            return True, "啟動初期"
-        return True, "符合條件"
+            return True, "🌱 啟動初期"
+        if "🔥" in phase and rsi >= 60:
+            return True, f"🔥 行情中段 RSI {rsi:.0f}"
+        if rsi >= 60 and vol_ratio >= 1.5:
+            return True, f"RSI {rsi:.0f} + Vol {vol_ratio:.1f}x 強勢追多"
+        if "S級" in strength_grade or "A級" in strength_grade:
+            return True, f"{strength_grade} 高強度信號"
+        if rsi >= 60:
+            return True, f"RSI {rsi:.0f} 追多"
+        return False, f"RSI {rsi:.0f} 不夠強勢"
     
     elif signal == "SHORT":
         if rsi <= 40:
             return True, f"RSI {rsi:.0f} 弱勢追空"
         return False, f"RSI {rsi:.0f} 未進入弱勢區，不做空"
     
-    return True, "符合條件"
+    return False, "未知信號"
 
-def open_position(state, symbol, signal, entry_price, phase, rsi):
+def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade="", vol_ratio=0):
     if len(state["positions"]) >= CONFIG["max_positions"]:
         return None, "已達最大持倉數"
     
@@ -59,7 +68,7 @@ def open_position(state, symbol, signal, entry_price, phase, rsi):
         if p["symbol"] == symbol:
             return None, "已有持倉"
     
-    should_open, reason = should_open_position(signal, phase, rsi)
+    should_open, reason = should_open_position(signal, phase, rsi, strength_grade, vol_ratio)
     if not should_open:
         return None, f"不開倉: {reason}"
     
@@ -262,7 +271,7 @@ def send_discord(msg):
 def process_signal(symbol, signal, price, phase, rsi, strength_score=0, strength_grade="", vol_ratio=1):
     state = load_state()
     
-    pos, reason = open_position(state, symbol, signal, price, phase, rsi)
+    pos, reason = open_position(state, symbol, signal, price, phase, rsi, strength_grade, vol_ratio)
     
     if pos:
         pos["strength_score"] = strength_score
