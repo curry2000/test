@@ -4,9 +4,18 @@
       {
         "key": "15M_68830_68962",
         "touched": false
+      },
+      {
+        "key": "4H_66970_68390",
+        "touched": false
       }
     ],
-    "bearish": [],
+    "bearish": [
+      {
+        "key": "15M_69627_69847",
+        "touched": false
+      }
+    ],
     "alerts": []
   },
   "ETH": {
@@ -14,9 +23,18 @@
       {
         "key": "1H_2049_2064",
         "touched": false
+      },
+      {
+        "key": "4H_1994_2030",
+        "touched": false
       }
     ],
-    "bearish": [],
+    "bearish": [
+      {
+        "key": "15M_2075_2084",
+        "touched": false
+      }
+    ],
     "alerts": []
   }
 }
