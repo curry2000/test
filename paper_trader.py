@@ -39,11 +39,11 @@ def get_price(symbol):
 
 def get_dynamic_tp(strength_grade="", vol_ratio=1.0):
     if "S" in strength_grade:
-        tp1, tp2, sl = 3, 7, 4
+        tp1, tp2, sl = 3, 7, 7
     elif "A" in strength_grade:
-        tp1, tp2, sl = 2, 4, 5
+        tp1, tp2, sl = 2, 4, 8
     elif "B" in strength_grade:
-        tp1, tp2, sl = 3, 5, 6
+        tp1, tp2, sl = 3, 5, 9
     else:
         tp1, tp2, sl = 5, 10, 10
     
