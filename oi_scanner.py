@@ -432,26 +432,37 @@ def filter_new_or_consistent(alerts):
             aggressive = oi_change > 10 or price_1h > 5 or (oi_change > 8 and price_1h > 4)
             
             base_signal = signal.replace("EARLY_", "")
+            signal_map = {"SHAKEOUT": "SHORT", "SQUEEZE": "LONG"}
+            norm_signal = signal_map.get(base_signal, base_signal)
+            
             prev_base = prev_signal.replace("EARLY_", "") if prev_signal else ""
+            prev_norm = signal_map.get(prev_base, prev_base)
             is_early = a.get("early_warning", False)
             
-            if is_early and base_signal in ["LONG", "SHORT"]:
+            if base_signal in ["SHAKEOUT", "SQUEEZE"]:
+                if prev_norm != norm_signal or time_diff > 1800:
+                    filtered.append(a)
+                    new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
+                    print(f"🟣 {symbol} {base_signal}: OI {oi_change:+.1f}%, 1H {a.get('price_change_1h',0):+.1f}%")
+                else:
+                    new_notified[symbol] = prev
+            elif is_early and norm_signal in ["LONG", "SHORT"]:
                 a["early_warning"] = True
                 filtered.append(a)
                 new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
                 print(f"⚡ {symbol} 早期預警: 5m {a.get('price_change_5m', 0):+.1f}%, Vol {a.get('vol_ratio', 0):.1f}x")
-            elif aggressive and base_signal in ["LONG", "SHORT"]:
+            elif aggressive and norm_signal in ["LONG", "SHORT"]:
                 a["aggressive"] = True
                 filtered.append(a)
                 new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
                 print(f"🔥 {symbol} 積極信號突破冷卻: OI {oi_change:.1f}%, 1H {price_1h:.1f}%")
             elif time_diff > 3600:
-                if base_signal == prev_base:
+                if norm_signal == prev_norm:
                     filtered.append(a)
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
                 else:
                     new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-            elif momentum_surge and base_signal == prev_base:
+            elif momentum_surge and norm_signal == prev_norm:
                 a["momentum_surge"] = True
                 filtered.append(a)
                 new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
