@@ -120,34 +120,83 @@ def check_positions(state):
         exit_reason = None
         exit_price = current_price
         
+        tp2_hit = pos.get("tp2_hit", False)
+        trailing_sl = pos.get("trailing_sl", 0)
+        remaining_pct = pos.get("remaining_pct", 100)
+        
         if pos["direction"] == "LONG":
             pnl_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
             
-            if current_price <= pos["sl"]:
+            if tp2_hit:
+                if trailing_sl > 0 and current_price <= trailing_sl:
+                    exit_reason = "TRAIL"
+                else:
+                    new_trail = current_price * 0.95
+                    if new_trail > trailing_sl:
+                        pos["trailing_sl"] = new_trail
+            elif current_price <= pos["sl"]:
                 exit_reason = "SL"
-            elif current_price >= pos["tp1"] and not pos["tp1_hit"]:
+            elif current_price >= pos["tp2"] and not tp2_hit:
+                pos["tp2_hit"] = True
+                pos["trailing_sl"] = current_price * 0.95
+                tp2_pnl = pnl_pct
+                tp2_usd = pos["size"] * 0.7 * tp2_pnl / 100
+                state["capital"] += tp2_usd
+                pos["size"] = pos["size"] * 0.3
+                pos["remaining_pct"] = 30
+                closed.append({
+                    "symbol": symbol, "direction": pos["direction"],
+                    "entry": pos["entry_price"], "exit": exit_price,
+                    "pnl_pct": tp2_pnl, "pnl_usd": tp2_usd,
+                    "reason": "TP2(70%平)", "phase": pos["phase"],
+                    "closed_at": now.isoformat()
+                })
+                state["closed"].append(closed[-1])
+            elif current_price >= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
                 pos["sl"] = pos["entry_price"]
-            elif current_price >= pos["tp2"]:
-                exit_reason = "TP2"
         else:
             pnl_pct = (pos["entry_price"] - current_price) / pos["entry_price"] * 100
             
-            if current_price >= pos["sl"]:
+            if tp2_hit:
+                if trailing_sl > 0 and current_price >= trailing_sl:
+                    exit_reason = "TRAIL"
+                else:
+                    new_trail = current_price * 1.05
+                    if trailing_sl == 0 or new_trail < trailing_sl:
+                        pos["trailing_sl"] = new_trail
+            elif current_price >= pos["sl"]:
                 exit_reason = "SL"
-            elif current_price <= pos["tp1"] and not pos["tp1_hit"]:
+            elif current_price <= pos["tp2"] and not tp2_hit:
+                pos["tp2_hit"] = True
+                pos["trailing_sl"] = current_price * 1.05
+                tp2_pnl = pnl_pct
+                tp2_usd = pos["size"] * 0.7 * tp2_pnl / 100
+                state["capital"] += tp2_usd
+                pos["size"] = pos["size"] * 0.3
+                pos["remaining_pct"] = 30
+                closed.append({
+                    "symbol": symbol, "direction": pos["direction"],
+                    "entry": pos["entry_price"], "exit": exit_price,
+                    "pnl_pct": tp2_pnl, "pnl_usd": tp2_usd,
+                    "reason": "TP2(70%平)", "phase": pos["phase"],
+                    "closed_at": now.isoformat()
+                })
+                state["closed"].append(closed[-1])
+            elif current_price <= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
                 pos["sl"] = pos["entry_price"]
-            elif current_price <= pos["tp2"]:
-                exit_reason = "TP2"
         
-        if hours_held >= CONFIG["time_exit_hours"] and not exit_reason:
+        if not tp2_hit and hours_held >= CONFIG["time_exit_hours"] and not exit_reason:
             exit_reason = "TIME"
+        if tp2_hit and hours_held >= CONFIG["time_exit_hours"] * 2 and not exit_reason:
+            exit_reason = "TIME(尾倉)"
         
         if exit_reason:
             pnl_usd = pos["size"] * pnl_pct / 100
             state["capital"] += pnl_usd
             
+            trail_tag = f"(尾倉{remaining_pct}%)" if tp2_hit else ""
             closed.append({
                 "symbol": symbol,
                 "direction": pos["direction"],
@@ -155,7 +204,7 @@ def check_positions(state):
                 "exit": exit_price,
                 "pnl_pct": pnl_pct,
                 "pnl_usd": pnl_usd,
-                "reason": exit_reason,
+                "reason": f"{exit_reason}{trail_tag}",
                 "phase": pos["phase"],
                 "closed_at": now.isoformat()
             })
