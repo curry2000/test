@@ -266,7 +266,7 @@ def get_signal_strength(oi_change, vol_ratio, rsi, signal, price_change_1h):
     
     return {"score": score, "grade": grade, "tags": tags}
 
-
+def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 5 and price_change_1h > 3:
         return "LONG", "新多進場，趨勢向上"
     elif oi_change > 5 and price_change_1h < -3:
