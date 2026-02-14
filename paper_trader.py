@@ -8,8 +8,9 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 CONFIG = {
     "capital": 10000,
+    "leverage": 5,
     "position_pct": 10,
-    "max_positions": 5,
+    "max_positions": 10,
     "sl_pct": 10,
     "tp1_pct": 5,
     "tp2_pct": 10,
@@ -37,28 +38,21 @@ def get_price(symbol):
         return None
 
 def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0):
-    if "⚠️" in phase:
-        return False, f"⚠️ 高位追高/低位追空，跳過"
-    
     if signal == "LONG":
-        if "🌱" in phase:
-            return True, "🌱 啟動初期"
-        if "🔥" in phase and rsi >= 60:
-            return True, f"🔥 行情中段 RSI {rsi:.0f}"
-        if rsi >= 60 and vol_ratio >= 1.5:
-            return True, f"RSI {rsi:.0f} + Vol {vol_ratio:.1f}x 強勢追多"
-        if "S級" in strength_grade or "A級" in strength_grade:
-            return True, f"{strength_grade} 高強度信號"
+        if rsi >= 80 and "⚠️" in phase:
+            return False, f"RSI {rsi:.0f} 極端超買+高位，跳過"
         if rsi >= 60:
-            return True, f"RSI {rsi:.0f} 追多"
-        return False, f"RSI {rsi:.0f} 不夠強勢"
+            return True, f"RSI {rsi:.0f} 強勢追多"
+        if "🌱" in phase:
+            return True, "啟動初期"
+        return True, "符合條件"
     
     elif signal == "SHORT":
         if rsi <= 40:
             return True, f"RSI {rsi:.0f} 弱勢追空"
         return False, f"RSI {rsi:.0f} 未進入弱勢區，不做空"
     
-    return False, "未知信號"
+    return True, "符合條件"
 
 def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade="", vol_ratio=0):
     if len(state["positions"]) >= CONFIG["max_positions"]:
@@ -72,7 +66,7 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
     if not should_open:
         return None, f"不開倉: {reason}"
     
-    position_size = state["capital"] * CONFIG["position_pct"] / 100
+    position_size = state["capital"] * CONFIG["position_pct"] / 100 * CONFIG["leverage"]
     
     if signal == "LONG":
         sl = entry_price * (1 - CONFIG["sl_pct"] / 100)
