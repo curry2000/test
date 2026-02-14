@@ -206,7 +206,67 @@ def get_phase_label(phase_data, signal):
             return "🌱啟動初期"
     return ""
 
-def get_direction_signal(oi_change, price_change_1h):
+def get_1h_volume_ratio(symbol):
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}USDT&interval=1h&limit=24"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if isinstance(data, list) and len(data) >= 6:
+            vols = [float(k[5]) for k in data]
+            avg_vol = sum(vols[:-1]) / len(vols[:-1])
+            last_vol = vols[-1]
+            return last_vol / avg_vol if avg_vol > 0 else 1
+    except:
+        pass
+    return 1
+
+def get_signal_strength(oi_change, vol_ratio, rsi, signal, price_change_1h):
+    score = 0
+    tags = []
+    
+    if vol_ratio >= 2:
+        score += 30
+        tags.append(f"📊Vol {vol_ratio:.1f}x")
+    elif vol_ratio >= 1.5:
+        score += 20
+        tags.append(f"📊Vol {vol_ratio:.1f}x")
+    
+    if signal == "LONG" and rsi >= 60:
+        score += 25
+        tags.append(f"💪RSI {rsi:.0f}")
+    elif signal == "SHORT" and rsi <= 40:
+        score += 25
+        tags.append(f"💪RSI {rsi:.0f}")
+    
+    oi = abs(oi_change)
+    if oi >= 15:
+        score += 25
+        tags.append(f"🔥OI {oi:.0f}%")
+    elif oi >= 10:
+        score += 15
+        tags.append(f"📈OI {oi:.0f}%")
+    elif oi >= 7:
+        score += 10
+    
+    p = abs(price_change_1h)
+    if p >= 5:
+        score += 20
+        tags.append(f"🚀1H {price_change_1h:+.1f}%")
+    elif p >= 3:
+        score += 10
+    
+    if score >= 60:
+        grade = "🔥🔥🔥 S級"
+    elif score >= 40:
+        grade = "🔥🔥 A級"
+    elif score >= 25:
+        grade = "🔥 B級"
+    else:
+        grade = "C級"
+    
+    return {"score": score, "grade": grade, "tags": tags}
+
+
     if oi_change > 5 and price_change_1h > 3:
         return "LONG", "新多進場，趨勢向上"
     elif oi_change > 5 and price_change_1h < -3:
@@ -261,10 +321,20 @@ def format_message(alerts, scanned):
         reason = "積極信號！" if a.get("aggressive") else ("動能加速！" if a.get("momentum_surge") else a['reason'])
         phase = a.get("phase", "")
         rsi = a.get("rsi", 0)
-        if phase and rsi:
-            lines.append(f"• 訊號: {signal_emoji(a['signal'])} {phase} | RSI: {rsi:.0f}")
-        else:
-            lines.append(f"• 訊號: {signal_emoji(a['signal'])} — {reason}")
+        grade = a.get("strength_grade", "")
+        tags = a.get("strength_tags", [])
+        
+        signal_line = f"• 訊號: {signal_emoji(a['signal'])}"
+        if phase:
+            signal_line += f" {phase}"
+        if grade:
+            signal_line += f" | {grade}"
+        if rsi:
+            signal_line += f" | RSI: {rsi:.0f}"
+        lines.append(signal_line)
+        
+        if tags:
+            lines.append(f"• 強度: {' '.join(tags)}")
         lines.append("")
     
     return "\n".join(lines)
@@ -295,7 +365,12 @@ def log_signals(alerts):
                 "signal": a["signal"],
                 "entry_price": a["price"],
                 "oi_change": a.get("oi_change", 0),
+                "oi_change_pct": a.get("oi_change", 0),
                 "price_change_1h": a["price_change_1h"],
+                "vol_ratio": a.get("1h_vol_ratio", 1),
+                "rsi": a.get("rsi", 50),
+                "strength_score": a.get("strength_score", 0),
+                "strength_grade": a.get("strength_grade", ""),
                 "source": "binance"
             })
     
@@ -454,6 +529,9 @@ def main():
         if signal in ["LONG", "SHORT"]:
             phase = get_market_phase(symbol)
             phase_label = get_phase_label(phase, signal)
+            rsi_val = phase["rsi"] if phase else 50
+            vol_1h = get_1h_volume_ratio(base)
+            strength = get_signal_strength(oi_change, vol_1h, rsi_val, signal, price_change_1h)
             alerts.append({
                 "symbol": base,
                 "price": coin["price"],
@@ -464,7 +542,11 @@ def main():
                 "signal": signal,
                 "reason": reason,
                 "phase": phase_label,
-                "rsi": phase["rsi"] if phase else 0
+                "rsi": rsi_val,
+                "1h_vol_ratio": vol_1h,
+                "strength_score": strength["score"],
+                "strength_grade": strength["grade"],
+                "strength_tags": strength["tags"]
             })
         elif signal in ["WAIT", "PENDING"] and abs(oi_change) > 8:
             alerts.append({
@@ -488,7 +570,7 @@ def main():
     save_json(STATE_FILE, current_state)
     
     all_alerts = early_alerts + alerts
-    all_alerts.sort(key=lambda x: abs(x.get("price_change_5m", 0)) + abs(x.get("oi_change", 0)), reverse=True)
+    all_alerts.sort(key=lambda x: x.get("strength_score", 0) + abs(x.get("price_change_5m", 0)) * 3, reverse=True)
     
     log_signals([a for a in all_alerts if not a.get("early_warning")])
     print(f"偵測到 {len(all_alerts)} 個訊號 (早期:{len(early_alerts)}, OI:{len(alerts)})")
