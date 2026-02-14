@@ -595,7 +595,10 @@ def main():
                         a["signal"],
                         a["price"],
                         a.get("phase", ""),
-                        a.get("rsi", 50)
+                        a.get("rsi", 50),
+                        a.get("strength_score", 0),
+                        a.get("strength_grade", ""),
+                        a.get("1h_vol_ratio", 1)
                     )
         except Exception as e:
             print(f"Paper trading error: {e}")

@@ -259,12 +259,16 @@ def send_discord(msg):
     except:
         pass
 
-def process_signal(symbol, signal, price, phase, rsi):
+def process_signal(symbol, signal, price, phase, rsi, strength_score=0, strength_grade="", vol_ratio=1):
     state = load_state()
     
     pos, reason = open_position(state, symbol, signal, price, phase, rsi)
     
     if pos:
+        pos["strength_score"] = strength_score
+        pos["strength_grade"] = strength_grade
+        pos["vol_ratio"] = vol_ratio
+        save_state(state)
         msg = format_trade_msg("OPEN", (pos, reason))
         print(msg)
         send_discord(msg)
