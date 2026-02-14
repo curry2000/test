@@ -38,30 +38,16 @@ def get_price(symbol):
 
 def should_open_position(signal, phase, rsi):
     if signal == "LONG":
-        if rsi > 80:
-            return False, "RSI 極度超買"
+        if rsi >= 60:
+            return True, f"RSI {rsi:.0f} 強勢追多"
         if "🌱" in phase:
-            return True, "啟動初期，最佳進場"
-        if "🔥" in phase:
-            return True, "行情中段，順勢進場"
-        if "⚠️" in phase:
-            if rsi < 65:
-                return True, "高位但RSI未過熱"
-            return False, "高位+RSI偏高"
+            return True, "啟動初期"
         return True, "符合條件"
     
     elif signal == "SHORT":
-        if rsi < 20:
-            return False, "RSI 極度超賣"
-        if "🌱" in phase:
-            return True, "啟動初期，最佳進場"
-        if "🔥" in phase:
-            return True, "行情中段，順勢進場"
-        if "⚠️" in phase:
-            if rsi > 35:
-                return True, "低位但RSI未過冷"
-            return False, "低位+RSI偏低"
-        return True, "符合條件"
+        if rsi <= 40:
+            return True, f"RSI {rsi:.0f} 弱勢追空"
+        return False, f"RSI {rsi:.0f} 未進入弱勢區，不做空"
     
     return True, "符合條件"
 
