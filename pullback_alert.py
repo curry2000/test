@@ -28,6 +28,65 @@ def send_discord(message):
     except Exception as e:
         print(f"Error: {e}")
 
+def check_1h_structure(symbol):
+    try:
+        data = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=20", timeout=5).json()
+        if not isinstance(data, list) or len(data) < 10:
+            return None
+        
+        candles = [{"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in data]
+        closes = [c["c"] for c in candles]
+        
+        gains, losses = [], []
+        for i in range(1, min(15, len(closes))):
+            d = closes[i] - closes[i-1]
+            gains.append(d if d > 0 else 0)
+            losses.append(-d if d < 0 else 0)
+        ag = sum(gains)/len(gains)
+        al = sum(losses)/len(losses) if sum(losses)>0 else 0.001
+        rsi_1h = 100-(100/(1+ag/al))
+        
+        ma7 = sum(closes[-7:]) / 7
+        
+        price_above_ma7 = closes[-1] > ma7
+        
+        prev_close = candles[-2]["c"]
+        prev_open = candles[-2]["o"]
+        prev_bull = prev_close > prev_open
+        
+        higher_lows = candles[-2]["l"] > candles[-3]["l"]
+        
+        bull_count = sum(1 for c in candles[-4:] if c["c"] > c["o"])
+        
+        score = 0
+        reasons = []
+        
+        if price_above_ma7:
+            score += 1
+            reasons.append("價>MA7")
+        if prev_bull:
+            score += 1
+            reasons.append("上根綠K")
+        if higher_lows:
+            score += 1
+            reasons.append("低點墊高")
+        if bull_count >= 3:
+            score += 1
+            reasons.append(f"近4根{bull_count}綠")
+        if 40 <= rsi_1h <= 70:
+            score += 1
+            reasons.append(f"RSI {rsi_1h:.0f}")
+        
+        return {
+            "score": score,
+            "rsi": rsi_1h,
+            "ma7": ma7,
+            "reasons": reasons,
+            "stable": score >= 3
+        }
+    except:
+        return None
+
 def check_pullback_bounce(symbol, name):
     try:
         data = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=15m&limit=20", timeout=5).json()
@@ -117,6 +176,15 @@ def check_pullback_bounce(symbol, name):
             score += 1
         
         if score >= 4 and bull_candle and pullback_from_high >= 0.5:
+            structure = check_1h_structure(symbol)
+            if not structure or not structure["stable"]:
+                s_score = structure["score"] if structure else 0
+                s_reasons = ", ".join(structure["reasons"]) if structure else "無資料"
+                print(f"{name}: 15M信號OK(分數{score}) 但1H結構不穩({s_score}/5: {s_reasons})，等待")
+                return None
+            
+            reasons.append(f"1H穩({structure['score']}/5: {', '.join(structure['reasons'])})")
+            
             return {
                 "name": name,
                 "price": current_price,
@@ -125,6 +193,7 @@ def check_pullback_bounce(symbol, name):
                 "pullback": pullback_from_high,
                 "bounce": bounce_from_low,
                 "rsi": rsi,
+                "rsi_1h": structure["rsi"],
                 "vol_ratio": vol_ratio,
                 "reasons": reasons,
                 "score": score,
@@ -155,13 +224,13 @@ def main():
                     print(f"{name}: 30分鐘內已通知，跳過")
                     continue
             
+            rsi_1h = result.get('rsi_1h', 0)
             msg = (
                 f"📢 **{result['name']} 回踩反彈信號！**\n\n"
                 f"• 現價: ${result['price']:,.2f}\n"
                 f"• 近期高點: ${result['high']:,.2f} → 回踩 {result['pullback']:.1f}% → 反彈 {result['bounce']:.1f}%\n"
-                f"• 15M RSI: {result['rsi']:.0f} | Vol: {result['vol_ratio']:.1f}x\n"
+                f"• 15M RSI: {result['rsi']:.0f} | 1H RSI: {rsi_1h:.0f} | Vol: {result['vol_ratio']:.1f}x\n"
                 f"• 條件: {' | '.join(result['reasons'])}\n"
-                f"• 評分: {result['score']}/6\n"
                 f"• 🎯 可考慮加倉"
             )
             print(msg)
