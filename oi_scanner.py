@@ -288,20 +288,26 @@ def get_signal_strength(oi_change, vol_ratio, rsi, signal, price_change_1h):
 
 def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 5 and price_change_1h > 3:
-        return "LONG", "新多進場，趨勢向上"
+        return "LONG", "強勢建倉"
     elif oi_change > 5 and price_change_1h < -3:
-        return "SHORT", "新空進場，趨勢向下"
-    elif oi_change < -5 and price_change_1h > 3:
-        return "WAIT", "軋空反彈，動能不足"
+        return "SHORT", "主動砸盤"
     elif oi_change < -5 and price_change_1h < -3:
-        return "WAIT", "多頭平倉，恐慌拋售"
+        return "SHAKEOUT", "多頭洗盤"
+    elif oi_change < -5 and price_change_1h > 3:
+        return "SQUEEZE", "空頭擠壓"
     elif abs(oi_change) > 8 and abs(price_change_1h) < 2:
         return "PENDING", "多空對峙，即將變盤"
     else:
         return "NONE", ""
 
 def signal_emoji(signal):
-    return {"LONG": "🟢 追多", "SHORT": "🔴 追空", "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢", "EARLY_LONG": "⚡ 早期做多", "EARLY_SHORT": "⚡ 早期做空", "NONE": "⚪ 無訊號"}.get(signal, signal)
+    return {
+        "LONG": "🟢 強勢建倉", "SHORT": "🔴 主動砸盤",
+        "SHAKEOUT": "🟣 多頭洗盤", "SQUEEZE": "🟡 空頭擠壓",
+        "WAIT": "⚠️ 觀望", "PENDING": "⏳ 蓄勢",
+        "EARLY_LONG": "⚡ 早期做多", "EARLY_SHORT": "⚡ 早期做空",
+        "NONE": "⚪ 無訊號"
+    }.get(signal, signal)
 
 def format_message(alerts, scanned, is_smallcap=False):
     tw_tz = timezone(timedelta(hours=8))
@@ -378,7 +384,7 @@ def log_signals(alerts):
         logs = []
     
     for a in alerts:
-        if a["signal"] in ["LONG", "SHORT"]:
+        if a["signal"] in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"]:
             logs.append({
                 "ts": timestamp,
                 "symbol": a["symbol"],
@@ -544,14 +550,20 @@ def main():
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
-        phase_data = get_market_phase(symbol) if signal in ["LONG", "SHORT"] else None
-        phase_label = get_phase_label(phase_data, signal) if phase_data else ""
+        effective_dir = signal
+        if signal == "SHAKEOUT":
+            effective_dir = "SHORT"
+        elif signal == "SQUEEZE":
+            effective_dir = "LONG"
+        
+        phase_data = get_market_phase(symbol) if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"] else None
+        phase_label = get_phase_label(phase_data, effective_dir) if phase_data else ""
         rsi_val = phase_data["rsi"] if phase_data else 50
         
         vol_1h = 1
-        if signal in ["LONG", "SHORT"]:
+        if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"]:
             vol_1h = get_1h_volume_ratio_okx(symbol)
-        strength = get_signal_strength(oi_change, vol_1h, rsi_val, signal, price_change_1h)
+        strength = get_signal_strength(oi_change, vol_1h, rsi_val, effective_dir, price_change_1h)
         
         alert = {
             "symbol": symbol,
@@ -571,11 +583,11 @@ def main():
         }
         
         if is_top:
-            if signal in ["LONG", "SHORT"] or (signal == "PENDING" and abs(oi_change) >= 8):
+            if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"] or (signal == "PENDING" and abs(oi_change) >= 8):
                 top_alerts.append(alert)
                 print(f"🚨 [TOP] {symbol}: OI {oi_change:+.1f}%, 1H {price_change_1h:+.1f}% → {signal_emoji(signal)}")
         else:
-            if signal in ["LONG", "SHORT"] and abs(oi_change) >= 8:
+            if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"] and abs(oi_change) >= 8:
                 smallcap_alerts.append(alert)
                 print(f"🚀 [SMALL] {symbol}: OI {oi_change:+.1f}%, 24H {coin['change_24h']:+.1f}% → {signal_emoji(signal)}")
     

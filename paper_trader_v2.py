@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime, timezone, timedelta
 
-STATE_FILE = os.path.expanduser("~/.openclaw/paper_state.json")
+STATE_FILE = os.path.expanduser("~/.openclaw/paper_state_v2.json")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 CONFIG = {
@@ -327,30 +327,11 @@ def format_trade_msg(action, data):
 📍 **持倉中** ({s['open_positions']} 筆)
 • 未實現盈虧: ${s['unrealized_pnl']:+.2f}"""
 
-def send_discord(msg, pin=False):
+def send_discord(msg):
     if not DISCORD_WEBHOOK or not msg:
         return
     try:
-        r = requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
-        if pin and r.status_code in (200, 204):
-            try:
-                bot_token = ""
-                import json as _json
-                with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
-                    cfg = _json.load(f)
-                bot_token = cfg.get("channels", {}).get("discord", {}).get("token", "")
-                if bot_token:
-                    msgs = requests.get(
-                        f"https://discord.com/api/v10/channels/1471200792945098955/messages?limit=1",
-                        headers={"Authorization": f"Bot {bot_token}"}, timeout=10
-                    ).json()
-                    if msgs and len(msgs) > 0:
-                        requests.put(
-                            f"https://discord.com/api/v10/channels/1471200792945098955/pins/{msgs[0]['id']}",
-                            headers={"Authorization": f"Bot {bot_token}"}, timeout=10
-                        )
-            except:
-                pass
+        requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
     except:
         pass
 
@@ -366,7 +347,7 @@ def process_signal(symbol, signal, price, phase, rsi, strength_score=0, strength
         save_state(state)
         msg = format_trade_msg("OPEN", (pos, reason))
         print(msg)
-        send_discord(msg, pin=True)
+        send_discord(msg)
         return True, reason
     else:
         print(f"⏭️ {symbol}: {reason}")
@@ -379,7 +360,7 @@ def check_and_close():
     for t in closed:
         msg = format_trade_msg("CLOSE", t)
         print(msg)
-        send_discord(msg, pin=True)
+        send_discord(msg)
     
     return closed
 

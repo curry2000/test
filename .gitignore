@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 venv/
 .env
+oi_state.json
+ob_state.json
+monitor_signals.json
+signal_log.json

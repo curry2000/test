@@ -204,90 +204,117 @@ def check_ob_status(symbol, price, bullish_obs, bearish_obs):
     ob_state = load_json(OB_STATE_FILE)
     if not isinstance(ob_state, dict):
         ob_state = {}
-    
+
     base = symbol.replace("USDT", "")
     if base not in ob_state:
-        ob_state[base] = {"bullish": [], "bearish": [], "alerts": []}
-    
+        ob_state[base] = {}
+
     alerts = []
-    current_bullish = []
-    current_bearish = []
-    
+
     for ob in bullish_obs:
-        mid = (ob["top"] + ob["bottom"]) / 2
-        ob_key = f"{ob['tf']}_{ob['bottom']:.0f}_{ob['top']:.0f}"
-        current_bullish.append(ob_key)
-        
-        dist_to_top = (price - ob["top"]) / price * 100
-        
-        if dist_to_top < 1.5 and dist_to_top > 0:
-            was_touched = any(o.get("key") == ob_key and o.get("touched") for o in ob_state[base].get("bullish", []))
-            if not was_touched:
-                alerts.append({
-                    "type": "DEFEND",
-                    "ob_type": "bullish",
-                    "symbol": base,
-                    "price": price,
-                    "ob": ob,
-                    "mid": mid,
-                    "message": f"✅ {base} ${price:,.0f} 守住支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
-                })
-                ob_state[base]["bullish"] = [{"key": ob_key, "touched": True} if o.get("key") == ob_key else o for o in ob_state[base].get("bullish", [])]
-                if not any(o.get("key") == ob_key for o in ob_state[base]["bullish"]):
-                    ob_state[base]["bullish"].append({"key": ob_key, "touched": True})
-    
+        ob_key = f"bull_{ob['tf']}_{ob['bottom']:.0f}_{ob['top']:.0f}"
+        prev = ob_state[base].get(ob_key, {"stage": "watching"})
+        stage = prev.get("stage", "watching")
+
+        in_zone = price <= ob["top"] and price >= ob["bottom"]
+        above = price > ob["top"]
+        below = price < ob["bottom"]
+
+        if stage == "watching" and in_zone:
+            alerts.append({
+                "type": "TEST", "ob_type": "bullish", "symbol": base, "price": price, "ob": ob,
+                "message": f"⚠️ {base} ${price:,.0f} 測試支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "testing"}
+
+        elif stage == "testing" and above:
+            alerts.append({
+                "type": "DEFEND", "ob_type": "bullish", "symbol": base, "price": price, "ob": ob,
+                "message": f"✅ {base} ${price:,.0f} 守住支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "defended"}
+
+        elif stage == "testing" and below:
+            alerts.append({
+                "type": "BREAK", "ob_type": "bullish", "symbol": base, "price": price, "ob": ob,
+                "message": f"❌ {base} ${price:,.0f} 跌破支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "broken"}
+
+        elif stage == "defended" and in_zone:
+            ob_state[base][ob_key] = {"stage": "testing"}
+
+        elif stage == "defended" and below:
+            alerts.append({
+                "type": "BREAK", "ob_type": "bullish", "symbol": base, "price": price, "ob": ob,
+                "message": f"❌ {base} ${price:,.0f} 跌破支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "broken"}
+
+        elif stage == "broken" and above:
+            alerts.append({
+                "type": "RECLAIM", "ob_type": "bullish", "symbol": base, "price": price, "ob": ob,
+                "message": f"🔄 {base} ${price:,.0f} 收復支撐 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "defended"}
+
     for ob in bearish_obs:
-        mid = (ob["top"] + ob["bottom"]) / 2
-        ob_key = f"{ob['tf']}_{ob['bottom']:.0f}_{ob['top']:.0f}"
-        current_bearish.append(ob_key)
-        
-        dist_to_bottom = (ob["bottom"] - price) / price * 100
-        
-        if dist_to_bottom < 1.5 and dist_to_bottom > 0:
-            was_touched = any(o.get("key") == ob_key and o.get("touched") for o in ob_state[base].get("bearish", []))
-            if not was_touched:
-                alerts.append({
-                    "type": "DEFEND",
-                    "ob_type": "bearish",
-                    "symbol": base,
-                    "price": price,
-                    "ob": ob,
-                    "mid": mid,
-                    "message": f"✅ {base} ${price:,.0f} 守住阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
-                })
-                ob_state[base]["bearish"] = [{"key": ob_key, "touched": True} if o.get("key") == ob_key else o for o in ob_state[base].get("bearish", [])]
-                if not any(o.get("key") == ob_key for o in ob_state[base]["bearish"]):
-                    ob_state[base]["bearish"].append({"key": ob_key, "touched": True})
-    
-    prev_bullish = [o.get("key") for o in ob_state[base].get("bullish", [])]
-    for ob_key in prev_bullish:
-        if ob_key not in current_bullish:
-            parts = ob_key.split("_")
-            if len(parts) >= 3:
-                alerts.append({
-                    "type": "BREAK",
-                    "ob_type": "bullish",
-                    "symbol": base,
-                    "price": price,
-                    "message": f"❌ {base} ${price:,.0f} 跌破支撐 OB [{parts[0]}] ${parts[1]}-${parts[2]}"
-                })
-    
-    prev_bearish = [o.get("key") for o in ob_state[base].get("bearish", [])]
-    for ob_key in prev_bearish:
-        if ob_key not in current_bearish:
-            parts = ob_key.split("_")
-            if len(parts) >= 3:
-                alerts.append({
-                    "type": "BREAK",
-                    "ob_type": "bearish",
-                    "symbol": base,
-                    "price": price,
-                    "message": f"❌ {base} ${price:,.0f} 突破阻力 OB [{parts[0]}] ${parts[1]}-${parts[2]}"
-                })
-    
-    ob_state[base]["bullish"] = [{"key": k, "touched": False} for k in current_bullish]
-    ob_state[base]["bearish"] = [{"key": k, "touched": False} for k in current_bearish]
-    
+        ob_key = f"bear_{ob['tf']}_{ob['bottom']:.0f}_{ob['top']:.0f}"
+        prev = ob_state[base].get(ob_key, {"stage": "watching"})
+        stage = prev.get("stage", "watching")
+
+        in_zone = price >= ob["bottom"] and price <= ob["top"]
+        below = price < ob["bottom"]
+        above = price > ob["top"]
+
+        if stage == "watching" and in_zone:
+            alerts.append({
+                "type": "TEST", "ob_type": "bearish", "symbol": base, "price": price, "ob": ob,
+                "message": f"⚠️ {base} ${price:,.0f} 測試阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "testing"}
+
+        elif stage == "testing" and below:
+            alerts.append({
+                "type": "DEFEND", "ob_type": "bearish", "symbol": base, "price": price, "ob": ob,
+                "message": f"✅ {base} ${price:,.0f} 守住阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "defended"}
+
+        elif stage == "testing" and above:
+            alerts.append({
+                "type": "BREAK", "ob_type": "bearish", "symbol": base, "price": price, "ob": ob,
+                "message": f"❌ {base} ${price:,.0f} 突破阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "broken"}
+
+        elif stage == "defended" and in_zone:
+            ob_state[base][ob_key] = {"stage": "testing"}
+
+        elif stage == "defended" and above:
+            alerts.append({
+                "type": "BREAK", "ob_type": "bearish", "symbol": base, "price": price, "ob": ob,
+                "message": f"❌ {base} ${price:,.0f} 突破阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "broken"}
+
+        elif stage == "broken" and below:
+            alerts.append({
+                "type": "RECLAIM", "ob_type": "bearish", "symbol": base, "price": price, "ob": ob,
+                "message": f"🔄 {base} ${price:,.0f} 收復阻力 OB [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f}"
+            })
+            ob_state[base][ob_key] = {"stage": "defended"}
+
+    stale = []
+    for k in ob_state[base]:
+        if k.startswith("bull_") or k.startswith("bear_"):
+            all_keys = [f"bull_{o['tf']}_{o['bottom']:.0f}_{o['top']:.0f}" for o in bullish_obs]
+            all_keys += [f"bear_{o['tf']}_{o['bottom']:.0f}_{o['top']:.0f}" for o in bearish_obs]
+            if k not in all_keys:
+                stale.append(k)
+    for k in stale:
+        del ob_state[base][k]
+
     save_json(OB_STATE_FILE, ob_state)
     return alerts
 

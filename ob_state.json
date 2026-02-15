@@ -1,39 +1,4 @@
 {
-  "BTC": {
-    "bullish": [
-      {
-        "key": "4H_66970_68390",
-        "touched": false
-      },
-      {
-        "key": "1H_66160_66488",
-        "touched": false
-      }
-    ],
-    "bearish": [
-      {
-        "key": "15M_69558_69846",
-        "touched": false
-      }
-    ],
-    "alerts": []
-  },
-  "ETH": {
-    "bullish": [
-      {
-        "key": "1H_2049_2064",
-        "touched": false
-      },
-      {
-        "key": "4H_1994_2030",
-        "touched": false
-      },
-      {
-        "key": "4H_1937_2010",
-        "touched": false
-      }
-    ],
-    "bearish": [],
-    "alerts": []
-  }
+  "BTC": {},
+  "ETH": {}
 }
