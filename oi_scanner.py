@@ -402,7 +402,7 @@ def format_message(alerts, scanned, is_smallcap=False):
     early_count = len([a for a in alerts if a.get("early_warning")])
     oi_count = len(alerts) - early_count
     
-    title = "🚀 **小幣大波動**" if is_smallcap else "🔍 **OI 異動掃描**"
+    title = "🚀 **小幣大波動 [OKX雲端]**" if is_smallcap else "🔍 **OI 異動掃描 [OKX雲端]**"
     lines = [f"{title} | {now}", f"掃描 {scanned} 幣種 | 早期⚡{early_count} OI📊{oi_count}", ""]
     
     for a in alerts[:10]:

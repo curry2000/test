@@ -206,7 +206,7 @@ def format_message(results):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
-    lines = [f"💼 **倉位建議** | {now}", ""]
+    lines = [f"💼 **倉位建議 [OKX雲端]** | {now}", ""]
     
     for r in results:
         pnl_emoji = "🟢" if r["pnl_pct"] >= 0 else "🔴"

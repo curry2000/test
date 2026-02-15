@@ -508,7 +508,7 @@ def format_message(analyses):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
-    lines = [f"📊 **技術分析** | {now}", ""]
+    lines = [f"📊 **技術分析 [OKX雲端]** | {now}", ""]
     
     for a in analyses:
         base = a["symbol"].replace("USDT", "")
@@ -617,7 +617,7 @@ def main():
     if ob_alerts:
         tw_tz = timezone(timedelta(hours=8))
         now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
-        ob_lines = [f"🎯 **OB 狀態更新** | {now}", ""]
+        ob_lines = [f"🎯 **OB 狀態更新 [OKX雲端]** | {now}", ""]
         for alert in ob_alerts:
             ob_lines.append(alert["message"])
         ob_message = "\n".join(ob_lines)

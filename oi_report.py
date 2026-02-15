@@ -115,7 +115,7 @@ def format_report(results, details, days):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%Y/%m/%d %H:%M")
     
-    lines = [f"📊 **OI 指標分析報告**", f"週期: 過去 {days} 天 | 生成: {now}", ""]
+    lines = [f"📊 **OI 指標分析報告 [OKX雲端]**", f"週期: 過去 {days} 天 | 生成: {now}", ""]
     
     lines.append("**📈 勝率統計**")
     
