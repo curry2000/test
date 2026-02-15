@@ -7,6 +7,7 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = "oi_state.json"
 SIGNAL_LOG = "signal_log.json"
 NOTIFIED_FILE = "oi_notified.json"
+SIGNAL_TRACKER_FILE = os.path.expanduser("~/.openclaw/signal_tracker_okx.json")
 
 def load_json(filepath):
     try:
@@ -21,6 +22,136 @@ def save_json(filepath, data):
             json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Save error: {e}")
+
+def load_tracker():
+    try:
+        with open(SIGNAL_TRACKER_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_tracker(data):
+    os.makedirs(os.path.dirname(SIGNAL_TRACKER_FILE), exist_ok=True)
+    with open(SIGNAL_TRACKER_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+GRADE_ORDER = {"C級": 0, "🔥 B級": 1, "🔥🔥 A級": 2, "🔥🔥🔥 S級": 3}
+
+def grade_rank(g):
+    return GRADE_ORDER.get(g, -1)
+
+def update_tracker_and_filter(alerts):
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    now_str = now.isoformat()
+    tracker = load_tracker()
+    to_notify = []
+
+    for sym in list(tracker.keys()):
+        t = tracker[sym]
+        last = datetime.fromisoformat(t["last_ts"])
+        if hasattr(last, 'tzinfo') and last.tzinfo is None:
+            last = last.replace(tzinfo=tw_tz)
+        if (now - last).total_seconds() > 21600:
+            del tracker[sym]
+
+    for a in alerts:
+        symbol = a["symbol"]
+        signal = a["signal"]
+        if signal not in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE", "EARLY_LONG", "EARLY_SHORT"]:
+            continue
+
+        base_signal = signal.replace("EARLY_", "")
+        signal_map = {"SHAKEOUT": "SHORT", "SQUEEZE": "LONG"}
+        norm_signal = signal_map.get(base_signal, base_signal)
+        oi_change = abs(a.get("oi_change", 0))
+        grade = a.get("strength_grade", "C級")
+        reason = None
+
+        if symbol not in tracker:
+            tracker[symbol] = {
+                "signal": base_signal, "norm_signal": norm_signal,
+                "first_ts": now_str, "last_ts": now_str, "count": 1,
+                "peak_oi": oi_change, "peak_grade": grade,
+                "current_oi": oi_change, "current_grade": grade,
+                "notified_grade": grade, "duration_min": 0,
+                "notified_sustained": False
+            }
+            reason = "🆕"
+            to_notify.append((a, reason, 0))
+            continue
+
+        prev = tracker[symbol]
+        prev_norm = prev.get("norm_signal", prev.get("signal", ""))
+        first_ts = datetime.fromisoformat(prev["first_ts"])
+        if hasattr(first_ts, 'tzinfo') and first_ts.tzinfo is None:
+            first_ts = first_ts.replace(tzinfo=tw_tz)
+        duration_min = int((now - first_ts).total_seconds() / 60)
+
+        if norm_signal != prev_norm:
+            tracker[symbol] = {
+                "signal": base_signal, "norm_signal": norm_signal,
+                "first_ts": now_str, "last_ts": now_str, "count": 1,
+                "peak_oi": oi_change, "peak_grade": grade,
+                "current_oi": oi_change, "current_grade": grade,
+                "notified_grade": grade, "duration_min": 0,
+                "notified_sustained": False
+            }
+            reason = "🔄"
+            to_notify.append((a, reason, 0))
+            continue
+
+        prev["last_ts"] = now_str
+        prev["count"] += 1
+        prev["current_oi"] = oi_change
+        prev["current_grade"] = grade
+        prev["duration_min"] = duration_min
+        if oi_change > prev.get("peak_oi", 0):
+            prev["peak_oi"] = oi_change
+        if grade_rank(grade) > grade_rank(prev.get("peak_grade", "C級")):
+            prev["peak_grade"] = grade
+
+        if grade_rank(grade) > grade_rank(prev.get("notified_grade", "C級")):
+            prev["notified_grade"] = grade
+            reason = "⬆️"
+            to_notify.append((a, reason, duration_min))
+        elif prev.get("peak_oi", 0) > 0 and oi_change < prev["peak_oi"] * 0.5:
+            reason = "📉"
+            prev["peak_oi"] = oi_change
+            to_notify.append((a, reason, duration_min))
+        elif duration_min >= 30 and not prev.get("notified_sustained"):
+            prev["notified_sustained"] = True
+            reason = "⏱️"
+            to_notify.append((a, reason, duration_min))
+
+        tracker[symbol] = prev
+
+    save_tracker(tracker)
+
+    logs = load_json(SIGNAL_LOG)
+    if not isinstance(logs, list):
+        logs = []
+    cutoff = now - timedelta(days=7)
+    for a, reason, _ in to_notify:
+        if a["signal"].replace("EARLY_", "") in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"]:
+            logs.append({
+                "ts": now_str, "symbol": a["symbol"], "signal": a["signal"],
+                "entry_price": a["price"], "oi_change": a.get("oi_change", 0),
+                "price_change_1h": a.get("price_change_1h", 0),
+                "strength_grade": a.get("strength_grade", ""),
+                "trigger": reason, "source": "okx"
+            })
+    logs = [l for l in logs if datetime.fromisoformat(l["ts"]) > cutoff]
+    save_json(SIGNAL_LOG, logs)
+
+    result = []
+    for a, reason, dur in to_notify:
+        a["notify_reason"] = reason
+        a["duration_min"] = dur
+        t = tracker.get(a["symbol"], {})
+        a["peak_oi_val"] = t.get("peak_oi", 0)
+        result.append(a)
+    return result
 
 def format_number(n):
     if n >= 1e9: return f"{n/1e9:.1f}B"
@@ -317,9 +448,15 @@ def format_message(alerts, scanned, is_smallcap=False):
     lines = [f"{title} | {now}", f"掃描 {scanned} 幣種 | 早期⚡{early_count} OI📊{oi_count}", ""]
     
     for a in alerts[:10]:
-        surge = "🔥" if a.get("aggressive") else ("⚡" if a.get("momentum_surge") or a.get("early_warning") else "")
+        reason_tag = a.get("notify_reason", "")
+        dur = a.get("duration_min", 0)
+        peak = a.get("peak_oi_val", 0)
         
-        lines.append(f"**{a['symbol']}** ${a['price']:,.4g} {surge}")
+        dur_str = ""
+        if dur > 0:
+            dur_str = f" (持續{dur}分鐘, peak OI +{peak:.1f}%)"
+        
+        lines.append(f"{reason_tag} **{a['symbol']}** ${a['price']:,.4g}{dur_str}")
         
         if a.get("early_warning"):
             price_5m = a.get("price_change_5m", 0)
@@ -369,118 +506,10 @@ def send_discord(message):
         print(f"Error: {e}")
 
 def log_signals(alerts):
-    tw_tz = timezone(timedelta(hours=8))
-    now = datetime.now(tw_tz)
-    timestamp = now.isoformat()
-    
-    logs = load_json(SIGNAL_LOG)
-    if not isinstance(logs, list):
-        logs = []
-    
-    for a in alerts:
-        if a["signal"] in ["LONG", "SHORT"]:
-            logs.append({
-                "ts": timestamp,
-                "symbol": a["symbol"],
-                "signal": a["signal"],
-                "entry_price": a["price"],
-                "oi_change": round(a["oi_change"], 2),
-                "oi_change_pct": round(a["oi_change"], 2),
-                "price_change_1h": round(a["price_change_1h"], 2),
-                "vol_ratio": round(a.get("1h_vol_ratio", 1), 2),
-                "rsi": round(a.get("rsi", 50), 1),
-                "strength_score": a.get("strength_score", 0),
-                "strength_grade": a.get("strength_grade", ""),
-                "checked": False
-            })
-    
-    cutoff = now - timedelta(days=7)
-    logs = [l for l in logs if datetime.fromisoformat(l["ts"]) > cutoff]
-    
-    save_json(SIGNAL_LOG, logs)
+    pass
 
 def filter_new_or_consistent(alerts):
-    tw_tz = timezone(timedelta(hours=8))
-    now = datetime.now(tw_tz)
-    
-    notified = load_json(NOTIFIED_FILE)
-    if not isinstance(notified, dict):
-        notified = {}
-    
-    filtered = []
-    new_notified = {}
-    
-    for a in alerts:
-        symbol = a["symbol"]
-        signal = a["signal"]
-        oi_change = abs(a.get("oi_change", 0))
-        change_24h = abs(a.get("change_24h", 0))
-        
-        if symbol in notified:
-            prev = notified[symbol]
-            prev_signal = prev.get("signal")
-            prev_oi = prev.get("oi_change", 0)
-            prev_24h = prev.get("change_24h", 0)
-            prev_time = datetime.fromisoformat(prev.get("ts", "2000-01-01T00:00:00"))
-            time_diff = (now - prev_time).total_seconds()
-            
-            oi_increased = oi_change > prev_oi * 1.5 or (oi_change - prev_oi) > 5
-            trend_accelerated = change_24h > prev_24h + 3
-            momentum_surge = oi_increased or trend_accelerated
-            
-            price_1h = abs(a.get("price_change_1h", 0))
-            aggressive = oi_change > 10 or price_1h > 5 or (oi_change > 8 and price_1h > 4)
-            
-            base_signal = signal.replace("EARLY_", "")
-            signal_map = {"SHAKEOUT": "SHORT", "SQUEEZE": "LONG"}
-            norm_signal = signal_map.get(base_signal, base_signal)
-            
-            prev_base = prev_signal.replace("EARLY_", "") if prev_signal else ""
-            prev_norm = signal_map.get(prev_base, prev_base)
-            is_early = a.get("early_warning", False)
-            
-            if base_signal in ["SHAKEOUT", "SQUEEZE"]:
-                if prev_norm != norm_signal or time_diff > 1800:
-                    filtered.append(a)
-                    new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-                    print(f"🟣 {symbol} {base_signal}: OI {oi_change:+.1f}%, 1H {a.get('price_change_1h',0):+.1f}%")
-                else:
-                    new_notified[symbol] = prev
-            elif is_early and norm_signal in ["LONG", "SHORT"]:
-                a["early_warning"] = True
-                filtered.append(a)
-                new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-                print(f"⚡ {symbol} 早期預警: 5m {a.get('price_change_5m', 0):+.1f}%, Vol {a.get('vol_ratio', 0):.1f}x")
-            elif aggressive and norm_signal in ["LONG", "SHORT"]:
-                a["aggressive"] = True
-                filtered.append(a)
-                new_notified[symbol] = {"signal": base_signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-                print(f"🔥 {symbol} 積極信號突破冷卻: OI {oi_change:.1f}%, 1H {price_1h:.1f}%")
-            elif time_diff > 3600:
-                if norm_signal == prev_norm:
-                    filtered.append(a)
-                    new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-                else:
-                    new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-            elif momentum_surge and norm_signal == prev_norm:
-                a["momentum_surge"] = True
-                filtered.append(a)
-                new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-                print(f"⚡ {symbol} 動能加速: OI {prev_oi:.1f}%→{oi_change:.1f}%, 24H {prev_24h:.1f}%→{change_24h:.1f}%")
-            else:
-                new_notified[symbol] = prev
-        else:
-            filtered.append(a)
-            new_notified[symbol] = {"signal": signal, "oi_change": oi_change, "change_24h": change_24h, "ts": now.isoformat()}
-    
-    for sym, data in notified.items():
-        if sym not in new_notified:
-            prev_time = datetime.fromisoformat(data.get("ts", "2000-01-01T00:00:00"))
-            if (now - prev_time).total_seconds() < 86400:
-                new_notified[sym] = data
-    
-    save_json(NOTIFIED_FILE, new_notified)
-    return filtered
+    return update_tracker_and_filter(alerts)
 
 def main():
     print("=== OI Scanner Start ===")
