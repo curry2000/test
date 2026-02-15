@@ -7,6 +7,7 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = "oi_state.json"
 SIGNAL_LOG = "signal_log.json"
 NOTIFIED_FILE = "oi_notified.json"
+FLASH_STATE = os.path.expanduser("~/.openclaw/flash_crash_state.json")
 
 def load_json(filepath):
     try:
@@ -168,6 +169,88 @@ def detect_early_momentum(symbol):
     except:
         pass
     return None
+
+def detect_flash_crash(symbols_data):
+    flash_state = load_json(FLASH_STATE)
+    if not isinstance(flash_state, dict):
+        flash_state = {}
+    
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    crashes = []
+    
+    for sym_data in symbols_data:
+        symbol = sym_data["symbol"]
+        try:
+            url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=5m&limit=13"
+            r = requests.get(url, timeout=10)
+            data = r.json()
+            if data.get("code") != "0" or len(data.get("data", [])) < 13:
+                continue
+            
+            sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
+            volumes = [float(k[5]) for k in sorted_data[:-1]]
+            avg_vol = sum(volumes) / len(volumes) if volumes else 0
+            
+            latest = sorted_data[-1]
+            latest_vol = float(latest[5])
+            latest_open = float(latest[1])
+            latest_close = float(latest[4])
+            latest_low = float(latest[3])
+            
+            drop = (latest_close - latest_open) / latest_open * 100 if latest_open > 0 else 0
+            wick_drop = (latest_low - latest_open) / latest_open * 100 if latest_open > 0 else 0
+            vol_ratio = latest_vol / avg_vol if avg_vol > 0 else 0
+            
+            is_crash = drop <= -5 and vol_ratio >= 5
+            is_hard_crash = wick_drop <= -8 and vol_ratio >= 3
+            
+            if is_crash or is_hard_crash:
+                prev_ts = flash_state.get(symbol, {}).get("ts", "2000-01-01T00:00:00")
+                prev_time = datetime.fromisoformat(prev_ts)
+                if hasattr(prev_time, 'tzinfo') and prev_time.tzinfo is None:
+                    prev_time = prev_time.replace(tzinfo=tw_tz)
+                time_diff = (now - prev_time).total_seconds()
+                
+                if time_diff > 600:
+                    crash_type = "硬閃崩" if is_hard_crash and wick_drop <= -8 else "閃崩"
+                    crashes.append({
+                        "symbol": symbol,
+                        "price": latest_close,
+                        "drop": drop,
+                        "wick_drop": wick_drop,
+                        "vol_ratio": vol_ratio,
+                        "type": crash_type
+                    })
+                    flash_state[symbol] = {"ts": now.isoformat(), "drop": drop}
+        except:
+            continue
+    
+    save_json(FLASH_STATE, flash_state)
+    return crashes
+
+def send_flash_alerts(crashes):
+    if not crashes:
+        return
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
+    
+    lines = [f"💥 **閃崩警報** | {now}", ""]
+    for c in crashes:
+        emoji = "🔻🔻" if c["wick_drop"] <= -8 else "🔻"
+        price = c["price"]
+        if price < 1:
+            lines.append(f"{emoji} **{c['symbol']}** ${price:.4f}")
+        else:
+            lines.append(f"{emoji} **{c['symbol']}** ${price:,.2f}")
+        lines.append(f"  5分鐘跌幅: {c['drop']:+.1f}% (最低: {c['wick_drop']:+.1f}%)")
+        lines.append(f"  成交量: {c['vol_ratio']:.1f}x 爆量 | 類型: {c['type']}")
+        lines.append(f"  ⚠️ 可能繼續下殺或洗盤反彈")
+        lines.append("")
+    
+    msg = "\n".join(lines)
+    print("\n" + msg)
+    send_discord(msg)
 
 def get_market_phase(symbol):
     try:
@@ -500,12 +583,19 @@ def main():
     
     print(f"獲取 {len(current_data)} 個幣種")
     
-    sorted_by_oi = sorted(current_data, key=lambda x: x["oi"], reverse=True)
-    top_100 = set(c["symbol"] for c in sorted_by_oi[:100])
+    sorted_by_vol = sorted(current_data, key=lambda x: x["volume"], reverse=True)
+    top_100 = set(c["symbol"] for c in sorted_by_vol[:100])
+    
+    print("掃描閃崩信號...")
+    flash_candidates = [{"symbol": c["symbol"]} for c in sorted_by_vol[:100]]
+    crashes = detect_flash_crash(flash_candidates)
+    if crashes:
+        print(f"💥 偵測到 {len(crashes)} 個閃崩!")
+        send_flash_alerts(crashes)
     
     early_alerts = []
     print("掃描早期動能信號...")
-    for coin in sorted_by_oi[:30]:
+    for coin in sorted_by_vol[:30]:
         momentum = detect_early_momentum(coin["symbol"])
         if momentum:
             early_alerts.append({
@@ -527,7 +617,7 @@ def main():
     top_alerts = []
     smallcap_alerts = []
     
-    for coin in current_data:
+    for coin in sorted_by_vol[:80]:
         symbol = coin["symbol"]
         current_state[symbol] = {"oi": coin["oi"], "price": coin["price"]}
         
