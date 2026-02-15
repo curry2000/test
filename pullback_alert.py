@@ -209,7 +209,7 @@ def main():
                     print(f"{name}: 2小時內已通知，跳過")
                     continue
             msg = (
-                f"📢 **{result['name']} 回踩反彈信號！**\n\n"
+                f"📢 **{result['name']} 回踩反彈信號！[BN本地]**\n\n"
                 f"• 現價: ${result['price']:,.2f}\n"
                 f"• 近期高點: ${result['high']:,.2f} → 回踩 {result['pullback']:.1f}% → 反彈 {result['bounce']:.1f}%\n"
                 f"• ATR波動率: {result['atr_pct']:.2f}% | 動態門檻: {result['atr_pct']*1.2:.1f}%\n"

@@ -285,7 +285,7 @@ def format_trade_msg(action, data):
     if action == "OPEN":
         pos, reason = data
         emoji = "🟢" if pos["direction"] == "LONG" else "🔴"
-        return f"""📝 **模擬開倉** | {now}
+        return f"""📝 **模擬開倉 [BN本地]** | {now}
 
 {emoji} **{pos['symbol']}** {pos['direction']}
 • 進場: ${pos['entry_price']:.4g}
@@ -297,7 +297,7 @@ def format_trade_msg(action, data):
     elif action == "CLOSE":
         t = data
         emoji = "✅" if t["pnl_pct"] > 0 else "❌"
-        return f"""📊 **模擬平倉** | {now}
+        return f"""📊 **模擬平倉 [BN本地]** | {now}
 
 {emoji} **{t['symbol']}** {t['direction']}
 • 進場: ${t['entry']:.4g} → 出場: ${t['exit']:.4g}
@@ -310,7 +310,7 @@ def format_trade_msg(action, data):
         avg_loss = s['total_loss_usd'] / s['losses'] if s['losses'] > 0 else 0
         profit_factor = abs(s['total_win_usd'] / s['total_loss_usd']) if s['total_loss_usd'] != 0 else 0
         
-        return f"""📈 **模擬交易報告**
+        return f"""📈 **模擬交易報告 [BN本地]**
 
 💰 **帳戶**
 • 初始本金: ${CONFIG['capital']:,.0f}

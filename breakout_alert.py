@@ -125,7 +125,7 @@ def check_breakout(symbol, name, level, direction, state, now):
             emoji = "🚀" if vol_ok else "⚠️"
 
             msg = (
-                f"{emoji} **{name} {dir_text}關卡！（{strength}）**\n\n"
+                f"{emoji} **{name} {dir_text}關卡！[BN本地]（{strength}）**\n\n"
                 f"• 1H 收線: ${prev_close:,.2f} {'>' if direction=='above' else '<'} ${level:,}\n"
                 f"• 現價: ${current_price:,.2f}\n"
                 f"• {vol_tag}（前10根平均）\n"
@@ -142,7 +142,7 @@ def check_breakout(symbol, name, level, direction, state, now):
 
         if failed:
             msg = (
-                f"❌ **{name} 假突破！**\n\n"
+                f"❌ **{name} 假突破！[BN本地]**\n\n"
                 f"• 現價 ${current_price:,.2f} 跌回關卡 ${level:,} 以下\n"
                 f"• 突破後 {hours_since:.1f}h 回落\n"
                 f"• ⚠️ 假突破，暫不加倉"
@@ -156,7 +156,7 @@ def check_breakout(symbol, name, level, direction, state, now):
 
             if confirmed == 2:
                 msg = (
-                    f"✅ **{name} 回踩確認！站穩 ${level:,}**\n\n"
+                    f"✅ **{name} 回踩確認！[BN本地] 站穩 ${level:,}**\n\n"
                     f"• 現價: ${current_price:,.2f}\n"
                     f"• 突破後連續 {confirmed} 根 1H 站穩\n"
                     f"• 突破量能: {s.get('vol_ratio',0):.1f}x\n"
@@ -168,7 +168,7 @@ def check_breakout(symbol, name, level, direction, state, now):
 
             elif confirmed == 4:
                 msg = (
-                    f"💪 **{name} 強勢站穩 ${level:,}！**\n\n"
+                    f"💪 **{name} 強勢站穩 ${level:,}！[BN本地]**\n\n"
                     f"• 現價: ${current_price:,.2f}\n"
                     f"• 連續 {confirmed} 根 1H 站穩（{hours_since:.0f}h）\n"
                     f"• RSI: {rsi:.0f}\n"
@@ -183,7 +183,7 @@ def check_breakout(symbol, name, level, direction, state, now):
     elif stage == "confirmed":
         if failed:
             msg = (
-                f"⚠️ **{name} 跌回關卡 ${level:,}！**\n\n"
+                f"⚠️ **{name} 跌回關卡 ${level:,}！[BN本地]**\n\n"
                 f"• 現價: ${current_price:,.2f}\n"
                 f"• 注意止損保護"
             )
