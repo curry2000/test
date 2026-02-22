@@ -160,6 +160,28 @@ def check_positions(state):
         if pos["direction"] == "LONG":
             pnl_pct = (current_price - pos["entry_price"]) / pos["entry_price"] * 100
             
+            # 30min checkpoint：進場 30 分鐘後虧 >3% → 砍半倉
+            if not pos.get("checkpoint_30m") and 0.5 <= hours_held <= 1.0 and pnl_pct < -3:
+                pos["checkpoint_30m"] = True
+                cp_usd = pos["size"] * 0.5 * pnl_pct / 100
+                state["capital"] += cp_usd
+                pos["size"] = pos["size"] * 0.5
+                pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
+                closed.append({
+                    "symbol": symbol, "direction": pos["direction"],
+                    "entry": pos["entry_price"], "exit": exit_price,
+                    "pnl_pct": pnl_pct, "pnl_usd": cp_usd,
+                    "reason": "30min檢查(半倉)", "phase": pos["phase"],
+                    "closed_at": now.isoformat(),
+                    "strength_grade": pos.get("strength_grade", ""),
+                    "strength_score": pos.get("strength_score", 0),
+                    "rsi": pos.get("rsi", 0),
+                    "vol_ratio": pos.get("vol_ratio", 0)
+                })
+                state["closed"].append(closed[-1])
+                remaining.append(pos)
+                continue
+            
             if tp2_hit:
                 if trailing_sl > 0 and current_price <= trailing_sl:
                     exit_reason = "TRAIL"
@@ -217,6 +239,28 @@ def check_positions(state):
                 pos["sl"] = pos["entry_price"]
         else:
             pnl_pct = (pos["entry_price"] - current_price) / pos["entry_price"] * 100
+            
+            # 30min checkpoint：進場 30 分鐘後虧 >3% → 砍半倉
+            if not pos.get("checkpoint_30m") and 0.5 <= hours_held <= 1.0 and pnl_pct < -3:
+                pos["checkpoint_30m"] = True
+                cp_usd = pos["size"] * 0.5 * pnl_pct / 100
+                state["capital"] += cp_usd
+                pos["size"] = pos["size"] * 0.5
+                pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
+                closed.append({
+                    "symbol": symbol, "direction": pos["direction"],
+                    "entry": pos["entry_price"], "exit": exit_price,
+                    "pnl_pct": pnl_pct, "pnl_usd": cp_usd,
+                    "reason": "30min檢查(半倉)", "phase": pos["phase"],
+                    "closed_at": now.isoformat(),
+                    "strength_grade": pos.get("strength_grade", ""),
+                    "strength_score": pos.get("strength_score", 0),
+                    "rsi": pos.get("rsi", 0),
+                    "vol_ratio": pos.get("vol_ratio", 0)
+                })
+                state["closed"].append(closed[-1])
+                remaining.append(pos)
+                continue
             
             if tp2_hit:
                 if trailing_sl > 0 and current_price >= trailing_sl:

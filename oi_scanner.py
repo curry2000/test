@@ -332,36 +332,43 @@ def get_signal_strength(oi_change, vol_ratio, rsi, signal, price_change_1h):
     score = 0
     tags = []
     
-    if vol_ratio >= 2:
+    # OI 是核心，提高權重
+    oi = abs(oi_change)
+    if oi >= 15:
         score += 30
+        tags.append(f"🔥OI {oi:.0f}%")
+    elif oi >= 10:
+        score += 20
+        tags.append(f"📈OI {oi:.0f}%")
+    elif oi >= 7:
+        score += 10
+    
+    # 量價齊升才加分，單獨量能降低
+    if vol_ratio >= 3 and oi >= 10:
+        score += 25
+        tags.append(f"📊Vol {vol_ratio:.1f}x")
+    elif vol_ratio >= 2:
+        score += 10
         tags.append(f"📊Vol {vol_ratio:.1f}x")
     elif vol_ratio >= 1.5:
-        score += 20
-        tags.append(f"📊Vol {vol_ratio:.1f}x")
+        score += 5
     
-    if signal == "LONG" and rsi >= 60:
-        score += 25
+    # 獎勵中間區（剛起步），不獎勵高位追高
+    if signal == "LONG" and 40 <= rsi <= 60:
+        score += 15
         tags.append(f"💪RSI {rsi:.0f}")
     elif signal == "SHORT" and rsi <= 40:
         score += 25
         tags.append(f"💪RSI {rsi:.0f}")
     
-    oi = abs(oi_change)
-    if oi >= 15:
-        score += 25
-        tags.append(f"🔥OI {oi:.0f}%")
-    elif oi >= 10:
-        score += 15
-        tags.append(f"📈OI {oi:.0f}%")
-    elif oi >= 7:
-        score += 10
-    
+    # 1H 價格：剛起步加分，已漲不加
     p = abs(price_change_1h)
-    if p >= 5:
-        score += 20
-        tags.append(f"🚀1H {price_change_1h:+.1f}%")
-    elif p >= 3:
+    if 3 <= p <= 5:
         score += 10
+        tags.append(f"🚀1H {price_change_1h:+.1f}%")
+    elif p > 5:
+        score += 0  # 已漲太多，不加分
+        tags.append(f"🚀1H {price_change_1h:+.1f}%")
     
     if score >= 60:
         grade = "🔥🔥🔥 S級"
@@ -697,7 +704,11 @@ def main():
             
             effective_signal = signal
             if signal == "SHAKEOUT":
-                effective_signal = "SHAKEOUT"
+                # SHAKEOUT RSI<60 才轉 SHORT 開倉，RSI≥60 只通知不開倉
+                if rsi_val < 60:
+                    effective_signal = "SHAKEOUT"  # paper_trader 會轉 SHORT
+                else:
+                    effective_signal = "SHAKEOUT_NOTIFY"  # 只通知
             elif signal == "SQUEEZE":
                 effective_signal = "SQUEEZE"
             
