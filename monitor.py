@@ -494,7 +494,7 @@ def format_message(analyses):
     tw_tz = TW_TIMEZONE
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
-    tag = os.environ.get("SOURCE_TAG", "OKX雲端")
+    tag = os.environ.get("SOURCE_TAG", "BN本地")
     lines = [f"📊 **技術分析 [{tag}]** | {now}", ""]
     
     for a in analyses:
@@ -601,7 +601,7 @@ def main():
     if ob_alerts:
         tw_tz = TW_TIMEZONE
         now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
-        ob_tag = os.environ.get("SOURCE_TAG", "OKX雲端")
+        ob_tag = os.environ.get("SOURCE_TAG", "BN本地")
         ob_lines = [f"🎯 **OB 狀態更新 [{ob_tag}]** | {now}", ""]
         for alert in ob_alerts:
             ob_lines.append(alert["message"])
