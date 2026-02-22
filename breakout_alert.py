@@ -1,14 +1,26 @@
-import requests
+"""
+突破/跌破監控系統
+監控指定價位的突破確認，發送通知
+"""
 import os
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-STATE_FILE = os.path.expanduser("~/.openclaw/breakout_state.json")
-LEVELS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "breakout_levels.json")
+# 使用共用模組
+from config import (
+    BREAKOUT_STATE_FILE,
+    BREAKOUT_LEVELS_FILE,
+    TW_TIMEZONE
+)
+from exchange_api import get_klines
+from notify import send_discord_message
+
+
 CHANNEL_ID = "1471200792945098955"
 
+
 def get_bot_token():
+    """取得 Discord Bot Token（用於釘選）"""
     try:
         with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
             config = json.load(f)
@@ -16,60 +28,62 @@ def get_bot_token():
     except:
         return ""
 
+
 def load_state():
+    """載入狀態"""
     try:
-        with open(STATE_FILE, "r") as f:
+        with open(BREAKOUT_STATE_FILE, "r") as f:
             return json.load(f)
     except:
         return {}
+
 
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    """儲存狀態"""
+    os.makedirs(os.path.dirname(BREAKOUT_STATE_FILE), exist_ok=True)
+    with open(BREAKOUT_STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
+
 def load_levels():
+    """載入監控關卡設定"""
     try:
-        with open(LEVELS_FILE, "r") as f:
+        with open(BREAKOUT_LEVELS_FILE, "r") as f:
             return json.load(f)
     except:
         return {}
 
+
 def send_discord(message, pin=False):
-    if not DISCORD_WEBHOOK:
-        print("No webhook")
-        return
-    try:
-        r = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
-        print(f"Discord: {r.status_code}")
-        if pin and r.status_code in (200, 204):
-            bot_token = get_bot_token()
-            if bot_token:
+    """發送 Discord 訊息（含釘選功能）"""
+    import requests
+    
+    success = send_discord_message(message)
+    
+    if success and pin:
+        bot_token = get_bot_token()
+        if bot_token:
+            try:
+                # 取得最新訊息
                 msgs = requests.get(
                     f"https://discord.com/api/v10/channels/{CHANNEL_ID}/messages?limit=1",
                     headers={"Authorization": f"Bot {bot_token}"},
                     timeout=10
                 ).json()
+                
                 if msgs and len(msgs) > 0:
+                    # 釘選訊息
                     requests.put(
                         f"https://discord.com/api/v10/channels/{CHANNEL_ID}/pins/{msgs[0]['id']}",
                         headers={"Authorization": f"Bot {bot_token}"},
                         timeout=10
                     )
-    except Exception as e:
-        print(f"Error: {e}")
+            except Exception as e:
+                print(f"Pin failed: {e}")
 
-def get_klines(symbol, interval="1h", limit=15):
-    try:
-        r = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}", timeout=5)
-        data = r.json()
-        if isinstance(data, list):
-            return [{"t":int(k[0]),"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in data]
-    except:
-        pass
-    return []
 
 def calc_rsi(closes, period=14):
+    """計算 RSI"""
     if len(closes) < period+1:
         return 50
     gains, losses = [], []
@@ -81,27 +95,38 @@ def calc_rsi(closes, period=14):
     al = sum(losses)/len(losses) if sum(losses) > 0 else 0.001
     return 100-(100/(1+ag/al))
 
+
 def check_breakout(symbol, name, level, direction, state, now):
-    candles = get_klines(symbol, "1h", 15)
-    if len(candles) < 5:
+    """檢查突破/跌破狀態"""
+    # 取得 K 線資料
+    klines = get_klines(symbol, "1h", 15)
+    if not klines or len(klines) < 5:
         print(f"{name}: 資料不足")
         return
+    
+    # 轉換格式（exchange_api 返回的格式）
+    candles = [{"t": k["open_time"], "o": k["open"], "h": k["high"], 
+                "l": k["low"], "c": k["close"], "v": k["volume"]} for k in klines]
 
     prev = candles[-2]
     current = candles[-1]
     prev_close = prev["c"]
     current_price = current["c"]
 
+    # 計算量能比例
     avg_vol = sum(c["v"] for c in candles[-11:-1]) / 10
     prev_vol = prev["v"]
     vol_ratio = prev_vol / avg_vol if avg_vol > 0 else 1
 
+    # 計算 RSI
     closes = [c["c"] for c in candles]
     rsi = calc_rsi(closes)
 
+    # 取得或初始化狀態
     key = f"{symbol}_{level}_{direction}"
     s = state.get(key, {"stage": "watching", "breakout_time": None, "confirmed_count": 0})
 
+    # 判斷突破/跌破
     if direction == "above":
         broke = prev_close >= level
         holding = current_price >= level
@@ -116,6 +141,7 @@ def check_breakout(symbol, name, level, direction, state, now):
 
     print(f"{name}: ${current_price:,.2f} | 關卡 ${level:,} | 1H收${prev_close:,.2f} | Vol {vol_ratio:.1f}x | RSI {rsi:.0f} | 階段:{stage} 確認:{confirmed}")
 
+    # 階段 1: 監控中
     if stage == "watching":
         if broke:
             vol_ok = vol_ratio >= 1.2
@@ -136,6 +162,7 @@ def check_breakout(symbol, name, level, direction, state, now):
             send_discord(msg, pin=True)
             s = {"stage": "confirming", "breakout_time": now.isoformat(), "confirmed_count": 0, "vol_ratio": vol_ratio}
 
+    # 階段 2: 確認中
     elif stage == "confirming":
         bt = datetime.fromisoformat(s["breakout_time"])
         hours_since = (now - bt).total_seconds() / 3600
@@ -177,9 +204,11 @@ def check_breakout(symbol, name, level, direction, state, now):
                 send_discord(msg, pin=True)
                 s["stage"] = "confirmed"
 
+        # 超過 24 小時未確認，重置
         if hours_since > 24 and stage == "confirming":
             s = {"stage": "watching", "breakout_time": None, "confirmed_count": 0}
 
+    # 階段 3: 已確認
     elif stage == "confirmed":
         if failed:
             msg = (
@@ -192,13 +221,18 @@ def check_breakout(symbol, name, level, direction, state, now):
 
     state[key] = s
 
+
 def backtest(symbol, name, level, direction, days=30):
-    candles = get_klines(symbol, "1h", min(days*24, 1000))
-    if len(candles) < 50:
+    """回測突破策略（保留原始功能）"""
+    klines = get_klines(symbol, "1h", min(days*24, 1000))
+    if not klines or len(klines) < 50:
         print(f"{name}: 資料不足")
         return
+    
+    # 轉換格式
+    candles = [{"t": k["open_time"], "o": k["open"], "h": k["high"],
+                "l": k["low"], "c": k["close"], "v": k["volume"]} for k in klines]
 
-    tw_tz = timezone(timedelta(hours=8))
     breakouts = []
     i = 1
 
@@ -245,7 +279,7 @@ def backtest(symbol, name, level, direction, days=30):
         else:
             final_pnl = (entry - final_price) / entry * 100
 
-        t = datetime.fromtimestamp(candles[i]["t"]/1000, tz=tw_tz)
+        t = datetime.fromtimestamp(candles[i]["t"]/1000, tz=TW_TIMEZONE)
         breakouts.append({
             "time": t.strftime("%m/%d %H:%M"),
             "entry": entry,
@@ -264,6 +298,7 @@ def backtest(symbol, name, level, direction, days=30):
         print(f"\n{name} ${level:,} {'突破' if direction=='above' else '跌破'}: 過去{days}天無觸發")
         return
 
+    # 統計結果
     total = len(breakouts)
     wins = sum(1 for b in breakouts if b["final_pnl"] > 0)
     vol_confirmed = [b for b in breakouts if b["vol_confirmed"]]
@@ -297,11 +332,13 @@ def backtest(symbol, name, level, direction, days=30):
         fail_tag = "❌假突破" if b["failed"] else "✅"
         print(f"  {b['time']} | 入場${b['entry']:,.0f} | Vol {b['vol_ratio']:.1f}x {vol_tag} | PnL {b['final_pnl']:+.2f}% | Max +{b['max_profit']:.2f}%/-{abs(b['max_dd']):.2f}% | {fail_tag}")
 
-def main():
-    import sys
-    tw_tz = timezone(timedelta(hours=8))
-    now = datetime.now(tw_tz)
 
+def main():
+    """主程序"""
+    import sys
+    now = datetime.now(TW_TIMEZONE)
+
+    # 回測模式
     if len(sys.argv) > 1 and sys.argv[1] == "backtest":
         days = int(sys.argv[2]) if len(sys.argv) > 2 else 30
         levels = load_levels()
@@ -312,6 +349,7 @@ def main():
                 backtest(symbol, cfg["name"], cfg["below"], "below", days)
         return
 
+    # 監控模式
     state = load_state()
     levels = load_levels()
 
@@ -322,6 +360,7 @@ def main():
             check_breakout(symbol, cfg["name"], cfg["below"], "below", state, now)
 
     save_state(state)
+
 
 if __name__ == "__main__":
     main()

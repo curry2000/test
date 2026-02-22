@@ -1,17 +1,21 @@
+import requests
 import json
 import os
 from datetime import datetime, timezone, timedelta
 
-# 使用共用模組
-from config import (
-    PAPER_STATE_FILE, PAPER_CONFIG, DYNAMIC_TP_CONFIG, VOL_RATIO_MULTIPLIERS,
-    FUNDING_RATE_THRESHOLD_LONG, FUNDING_RATE_THRESHOLD_SHORT,
-    RSI_EXTREME_HIGH, RSI_HIGH, RSI_EXTREME_LOW, RSI_LOW
-)
-from exchange_api import get_price, get_funding_rate, get_klines
-from notify import send_discord_message, send_trade_update
-STATE_FILE = PAPER_STATE_FILE
-CONFIG = PAPER_CONFIG
+STATE_FILE = os.path.expanduser("~/.openclaw/paper_state.json")
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
+
+CONFIG = {
+    "capital": 10000,
+    "leverage": 5,
+    "position_pct": 10,
+    "max_positions": 10,
+    "sl_pct": 10,
+    "tp1_pct": 5,
+    "tp2_pct": 10,
+    "time_exit_hours": 6
+}
 
 def load_state():
     try:
@@ -25,63 +29,50 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
+def get_price(symbol):
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}USDT"
+        r = requests.get(url, timeout=5)
+        return float(r.json()["price"])
+    except:
+        return None
+
 def get_dynamic_tp(strength_grade="", vol_ratio=1.0):
-    """動態 TP/SL（基於信號強度和成交量倍數）"""
-    # 基礎值
     if "S" in strength_grade:
-        base = DYNAMIC_TP_CONFIG["S"]
+        tp1, tp2, sl = 3, 7, 7
     elif "A" in strength_grade:
-        base = DYNAMIC_TP_CONFIG["A"]
+        tp1, tp2, sl = 2, 4, 8
     elif "B" in strength_grade:
-        base = DYNAMIC_TP_CONFIG["B"]
+        tp1, tp2, sl = 3, 5, 9
     else:
-        base = DYNAMIC_TP_CONFIG["default"]
+        tp1, tp2, sl = 5, 10, 10
     
-    tp1, tp2, sl = base["tp1"], base["tp2"], base["sl"]
-    
-    # 成交量倍數調整
-    for threshold, multiplier in sorted(VOL_RATIO_MULTIPLIERS.items(), reverse=True):
-        if vol_ratio >= threshold:
-            tp1 *= multiplier["tp1"]
-            tp2 *= multiplier["tp2"]
-            break
+    if vol_ratio >= 3:
+        tp1 *= 1.5
+        tp2 *= 1.8
+    elif vol_ratio >= 2:
+        tp1 *= 1.3
+        tp2 *= 1.5
+    elif vol_ratio >= 1.5:
+        tp1 *= 1.1
+        tp2 *= 1.2
     
     return round(tp1, 1), round(tp2, 1), sl
 
-def get_6h_price_move(symbol):
-    """取得過去 6 小時的價格漲跌幅"""
-    try:
-        klines = get_klines(symbol, "1h", 7)
-        if len(klines) >= 7:
-            price_6h_ago = klines[0]["open"]
-            price_now = klines[-1]["close"]
-            return (price_now - price_6h_ago) / price_6h_ago * 100
-    except:
-        pass
-    return None
-
-def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0, symbol=""):
-    # 資金費率過濾（逆向策略）
-    fr = get_funding_rate(symbol) if symbol else 0
-    fr_pct = fr * 100  # 轉成百分比
-    
+def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0):
     if signal == "LONG":
-        if fr > 0.0001:  # 費率 > +0.01% 不做多
-            return False, f"資金費率 {fr_pct:+.4f}% 偏正，不做多"
         if rsi >= 80 and "⚠️" in phase:
             return False, f"RSI {rsi:.0f} 極端超買+高位，跳過"
         if rsi >= 60:
-            return True, f"RSI {rsi:.0f} 強勢追多 FR:{fr_pct:+.4f}%"
+            return True, f"RSI {rsi:.0f} 強勢追多"
         if "🌱" in phase:
-            return True, f"啟動初期 FR:{fr_pct:+.4f}%"
-        return True, f"符合條件 FR:{fr_pct:+.4f}%"
+            return True, "啟動初期"
+        return True, "符合條件"
     
     elif signal == "SHORT":
-        if fr < -0.0005:  # 費率 < -0.05% 不做空
-            return False, f"資金費率 {fr_pct:+.4f}% 偏負，不做空"
         if rsi <= 40:
-            return True, f"RSI {rsi:.0f} 做空 FR:{fr_pct:+.4f}%"
-        return False, f"RSI {rsi:.0f} > 40，不做空"
+            return True, f"RSI {rsi:.0f} 弱勢追空"
+        return False, f"RSI {rsi:.0f} 未進入弱勢區，不做空"
     
     return True, "符合條件"
 
@@ -93,7 +84,7 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
         if p["symbol"] == symbol:
             return None, "已有持倉"
     
-    should_open, reason = should_open_position(signal, phase, rsi, strength_grade, vol_ratio, symbol)
+    should_open, reason = should_open_position(signal, phase, rsi, strength_grade, vol_ratio)
     if not should_open:
         return None, f"不開倉: {reason}"
     
@@ -168,30 +159,7 @@ def check_positions(state):
                     if new_trail > trailing_sl:
                         pos["trailing_sl"] = new_trail
             elif current_price <= pos["sl"]:
-                if not pos.get("sl_half_hit"):
-                    # 分批止損：第一次碰 SL，先砍 50%
-                    sl_pnl = pnl_pct
-                    sl_usd = pos["size"] * 0.5 * sl_pnl / 100
-                    state["capital"] += sl_usd
-                    pos["size"] = pos["size"] * 0.5
-                    pos["sl_half_hit"] = True
-                    pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
-                    # 第二批的 SL 設在 -10%
-                    pos["sl"] = pos["entry_price"] * 0.9
-                    closed.append({
-                        "symbol": symbol, "direction": pos["direction"],
-                        "entry": pos["entry_price"], "exit": exit_price,
-                        "pnl_pct": sl_pnl, "pnl_usd": sl_usd,
-                        "reason": "SL(半倉)", "phase": pos["phase"],
-                        "closed_at": now.isoformat(),
-                        "strength_grade": pos.get("strength_grade", ""),
-                        "strength_score": pos.get("strength_score", 0),
-                        "rsi": pos.get("rsi", 0),
-                        "vol_ratio": pos.get("vol_ratio", 0)
-                    })
-                    state["closed"].append(closed[-1])
-                else:
-                    exit_reason = "SL(清倉)"
+                exit_reason = "SL"
             elif current_price >= pos["tp2"] and not tp2_hit:
                 pos["tp2_hit"] = True
                 pos["trailing_sl"] = current_price * 0.95
@@ -205,11 +173,7 @@ def check_positions(state):
                     "entry": pos["entry_price"], "exit": exit_price,
                     "pnl_pct": tp2_pnl, "pnl_usd": tp2_usd,
                     "reason": "TP2(70%平)", "phase": pos["phase"],
-                    "closed_at": now.isoformat(),
-                    "strength_grade": pos.get("strength_grade", ""),
-                    "strength_score": pos.get("strength_score", 0),
-                    "rsi": pos.get("rsi", 0),
-                    "vol_ratio": pos.get("vol_ratio", 0)
+                    "closed_at": now.isoformat()
                 })
                 state["closed"].append(closed[-1])
             elif current_price >= pos["tp1"] and not pos.get("tp1_hit"):
@@ -226,28 +190,7 @@ def check_positions(state):
                     if trailing_sl == 0 or new_trail < trailing_sl:
                         pos["trailing_sl"] = new_trail
             elif current_price >= pos["sl"]:
-                if not pos.get("sl_half_hit"):
-                    sl_pnl = pnl_pct
-                    sl_usd = pos["size"] * 0.5 * sl_pnl / 100
-                    state["capital"] += sl_usd
-                    pos["size"] = pos["size"] * 0.5
-                    pos["sl_half_hit"] = True
-                    pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
-                    pos["sl"] = pos["entry_price"] * 1.1
-                    closed.append({
-                        "symbol": symbol, "direction": pos["direction"],
-                        "entry": pos["entry_price"], "exit": exit_price,
-                        "pnl_pct": sl_pnl, "pnl_usd": sl_usd,
-                        "reason": "SL(半倉)", "phase": pos["phase"],
-                        "closed_at": now.isoformat(),
-                        "strength_grade": pos.get("strength_grade", ""),
-                        "strength_score": pos.get("strength_score", 0),
-                        "rsi": pos.get("rsi", 0),
-                        "vol_ratio": pos.get("vol_ratio", 0)
-                    })
-                    state["closed"].append(closed[-1])
-                else:
-                    exit_reason = "SL(清倉)"
+                exit_reason = "SL"
             elif current_price <= pos["tp2"] and not tp2_hit:
                 pos["tp2_hit"] = True
                 pos["trailing_sl"] = current_price * 1.05
@@ -261,42 +204,15 @@ def check_positions(state):
                     "entry": pos["entry_price"], "exit": exit_price,
                     "pnl_pct": tp2_pnl, "pnl_usd": tp2_usd,
                     "reason": "TP2(70%平)", "phase": pos["phase"],
-                    "closed_at": now.isoformat(),
-                    "strength_grade": pos.get("strength_grade", ""),
-                    "strength_score": pos.get("strength_score", 0),
-                    "rsi": pos.get("rsi", 0),
-                    "vol_ratio": pos.get("vol_ratio", 0)
+                    "closed_at": now.isoformat()
                 })
                 state["closed"].append(closed[-1])
             elif current_price <= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
                 pos["sl"] = pos["entry_price"]
         
-        # 全倉追蹤止盈 + 保本邏輯（未碰 TP2 的持倉）
-        if not tp2_hit and not exit_reason:
-            peak = pos.get("peak_pnl", 0)
-            if pnl_pct > peak:
-                pos["peak_pnl"] = pnl_pct
-                peak = pnl_pct
-            
-            # 浮盈 >= 3% 啟動保本線
-            if peak >= 3 and not pos.get("breakeven_active"):
-                pos["breakeven_active"] = True
-            
-            # 浮盈 >= 5% 啟動全倉追蹤止盈（回撤 40% 出場）
-            if peak >= 5:
-                trail_exit_pnl = peak * 0.6  # 保留 60% 的最高浮盈
-                if pnl_pct <= trail_exit_pnl:
-                    exit_reason = "TRAIL_FULL"
-            
-            # 保本出場：曾浮盈 >= 3% 但跌回 0.5% 以下
-            if pos.get("breakeven_active") and pnl_pct <= 0.5 and not exit_reason:
-                exit_reason = "BREAKEVEN"
-            
-            # 時間到期
-            if hours_held >= CONFIG["time_exit_hours"] and not exit_reason:
-                exit_reason = "TIME"
-        
+        if not tp2_hit and hours_held >= CONFIG["time_exit_hours"] and not exit_reason:
+            exit_reason = "TIME"
         if tp2_hit and hours_held >= CONFIG["time_exit_hours"] * 2 and not exit_reason:
             exit_reason = "TIME(尾倉)"
         
@@ -314,11 +230,7 @@ def check_positions(state):
                 "pnl_usd": pnl_usd,
                 "reason": f"{exit_reason}{trail_tag}",
                 "phase": pos["phase"],
-                "closed_at": now.isoformat(),
-                "strength_grade": pos.get("strength_grade", ""),
-                "strength_score": pos.get("strength_score", 0),
-                "rsi": pos.get("rsi", 0),
-                "vol_ratio": pos.get("vol_ratio", 0)
+                "closed_at": now.isoformat()
             })
             
             state["closed"].append(closed[-1])
@@ -416,34 +328,31 @@ def format_trade_msg(action, data):
 • 未實現盈虧: ${s['unrealized_pnl']:+.2f}"""
 
 def send_discord(msg, pin=False):
-    """發送 Discord 訊息（使用共用 notify 模組，保留釘選功能）"""
-    if not msg:
+    if not DISCORD_WEBHOOK or not msg:
         return
-    
-    # 使用共用模組發送訊息
-    success = send_discord_message(msg)
-    
-    # 如果需要釘選且發送成功
-    if pin and success:
-        try:
-            import requests
-            import json as _json
-            bot_token = ""
-            with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
-                cfg = _json.load(f)
-            bot_token = cfg.get("channels", {}).get("discord", {}).get("token", "")
-            if bot_token:
-                msgs = requests.get(
-                    f"https://discord.com/api/v10/channels/1471200792945098955/messages?limit=1",
-                    headers={"Authorization": f"Bot {bot_token}"}, timeout=10
-                ).json()
-                if msgs and len(msgs) > 0:
-                    requests.put(
-                        f"https://discord.com/api/v10/channels/1471200792945098955/pins/{msgs[0]['id']}",
+    try:
+        r = requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
+        if pin and r.status_code in (200, 204):
+            try:
+                bot_token = ""
+                import json as _json
+                with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
+                    cfg = _json.load(f)
+                bot_token = cfg.get("channels", {}).get("discord", {}).get("token", "")
+                if bot_token:
+                    msgs = requests.get(
+                        f"https://discord.com/api/v10/channels/1471200792945098955/messages?limit=1",
                         headers={"Authorization": f"Bot {bot_token}"}, timeout=10
-                    )
-        except:
-            pass
+                    ).json()
+                    if msgs and len(msgs) > 0:
+                        requests.put(
+                            f"https://discord.com/api/v10/channels/1471200792945098955/pins/{msgs[0]['id']}",
+                            headers={"Authorization": f"Bot {bot_token}"}, timeout=10
+                        )
+            except:
+                pass
+    except:
+        pass
 
 def process_signal(symbol, signal, price, phase, rsi, strength_score=0, strength_grade="", vol_ratio=1):
     state = load_state()

@@ -1,13 +1,22 @@
-import requests
+"""
+Monitor 系統 - Order Block 和 FVG 監控
+偵測關鍵支撐壓力位並發送通知
+"""
 import os
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 import numpy as np
 
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
+# 使用共用模組
+from config import (
+    MONITOR_SIGNALS_FILE,
+    OB_STATE_FILE,
+    TW_TIMEZONE
+)
+from exchange_api import get_klines
+from notify import send_discord_message
+
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
-SIGNAL_LOG = "monitor_signals.json"
-OB_STATE_FILE = "ob_state.json"
 
 CONFIDENCE_TABLE = {
     "rsi_high_bearish": 75,
@@ -32,31 +41,8 @@ def save_json(filepath, data):
     except:
         pass
 
-def get_klines(symbol, interval, limit):
-    base = symbol.replace("USDT", "")
-    okx_symbol = f"{base}-USDT-SWAP"
-    
-    try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={okx_symbol}&bar={interval}&limit={limit}"
-        r = requests.get(url, timeout=15)
-        data = r.json()
-        if data.get("code") == "0" and data.get("data"):
-            return [{"open": float(k[1]), "high": float(k[2]), "low": float(k[3]), 
-                    "close": float(k[4]), "volume": float(k[5])} for k in reversed(data["data"])]
-    except:
-        pass
-    
-    try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
-        r = requests.get(url, timeout=15)
-        data = r.json()
-        if isinstance(data, list):
-            return [{"open": float(k[1]), "high": float(k[2]), "low": float(k[3]),
-                    "close": float(k[4]), "volume": float(k[5])} for k in data]
-    except:
-        pass
-    
-    return []
+# 注意：get_klines 已從 exchange_api 導入，此處不需要重新定義
+# 如果 exchange_api.get_klines 返回格式不同，在此處轉換
 
 def calculate_rsi(klines, period=14):
     if len(klines) < period + 1:
@@ -403,11 +389,11 @@ def log_signals(signals):
     if not signals:
         return
     
-    tw_tz = timezone(timedelta(hours=8))
+    tw_tz = TW_TIMEZONE
     now = datetime.now(tw_tz)
     timestamp = now.isoformat()
     
-    logs = load_json(SIGNAL_LOG)
+    logs = load_json(MONITOR_SIGNALS_FILE)
     if not isinstance(logs, list):
         logs = []
     
@@ -425,7 +411,7 @@ def log_signals(signals):
     cutoff = now - timedelta(days=7)
     logs = [l for l in logs if datetime.fromisoformat(l["ts"]) > cutoff]
     
-    save_json(SIGNAL_LOG, logs)
+    save_json(MONITOR_SIGNALS_FILE, logs)
     print(f"已記錄 {len(signals)} 個訊號")
 
 def analyze_symbol(symbol):
@@ -505,7 +491,7 @@ def analyze_symbol(symbol):
     }
 
 def format_message(analyses):
-    tw_tz = timezone(timedelta(hours=8))
+    tw_tz = TW_TIMEZONE
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
     tag = os.environ.get("SOURCE_TAG", "OKX雲端")
@@ -573,15 +559,12 @@ def format_message(analyses):
     return "\n".join(lines)
 
 def send_discord(message):
-    if not DISCORD_WEBHOOK:
-        print("No webhook")
-        return
-    
-    try:
-        r = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
-        print(f"Discord: {r.status_code}")
-    except Exception as e:
-        print(f"Error: {e}")
+    """發送 Discord 訊息（使用共用 notify 模組）"""
+    success = send_discord_message(message)
+    if success:
+        print("Discord: 200 OK")
+    else:
+        print("Discord: Send failed")
 
 def main():
     print("=== Crypto Monitor Start ===")
@@ -616,7 +599,7 @@ def main():
         send_discord(message)
     
     if ob_alerts:
-        tw_tz = timezone(timedelta(hours=8))
+        tw_tz = TW_TIMEZONE
         now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
         ob_tag = os.environ.get("SOURCE_TAG", "OKX雲端")
         ob_lines = [f"🎯 **OB 狀態更新 [{ob_tag}]** | {now}", ""]

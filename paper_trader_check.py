@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime, timezone, timedelta
 
-STATE_FILE = os.path.expanduser("~/.openclaw/paper_state_v2.json")
+STATE_FILE = os.path.expanduser("~/.openclaw/paper_state.json")
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
 CONFIG = {
@@ -285,7 +285,7 @@ def format_trade_msg(action, data):
     if action == "OPEN":
         pos, reason = data
         emoji = "🟢" if pos["direction"] == "LONG" else "🔴"
-        return f"""📝 **模擬開倉** | {now}
+        return f"""📝 **模擬開倉 [BN本地]** | {now}
 
 {emoji} **{pos['symbol']}** {pos['direction']}
 • 進場: ${pos['entry_price']:.4g}
@@ -297,7 +297,7 @@ def format_trade_msg(action, data):
     elif action == "CLOSE":
         t = data
         emoji = "✅" if t["pnl_pct"] > 0 else "❌"
-        return f"""📊 **模擬平倉** | {now}
+        return f"""📊 **模擬平倉 [BN本地]** | {now}
 
 {emoji} **{t['symbol']}** {t['direction']}
 • 進場: ${t['entry']:.4g} → 出場: ${t['exit']:.4g}
@@ -310,7 +310,7 @@ def format_trade_msg(action, data):
         avg_loss = s['total_loss_usd'] / s['losses'] if s['losses'] > 0 else 0
         profit_factor = abs(s['total_win_usd'] / s['total_loss_usd']) if s['total_loss_usd'] != 0 else 0
         
-        return f"""📈 **模擬交易報告**
+        return f"""📈 **模擬交易報告 [BN本地]**
 
 💰 **帳戶**
 • 初始本金: ${CONFIG['capital']:,.0f}
@@ -327,11 +327,30 @@ def format_trade_msg(action, data):
 📍 **持倉中** ({s['open_positions']} 筆)
 • 未實現盈虧: ${s['unrealized_pnl']:+.2f}"""
 
-def send_discord(msg):
+def send_discord(msg, pin=False):
     if not DISCORD_WEBHOOK or not msg:
         return
     try:
-        requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
+        r = requests.post(DISCORD_WEBHOOK, json={"content": msg}, timeout=10)
+        if pin and r.status_code in (200, 204):
+            try:
+                bot_token = ""
+                import json as _json
+                with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
+                    cfg = _json.load(f)
+                bot_token = cfg.get("channels", {}).get("discord", {}).get("token", "")
+                if bot_token:
+                    msgs = requests.get(
+                        f"https://discord.com/api/v10/channels/1471200792945098955/messages?limit=1",
+                        headers={"Authorization": f"Bot {bot_token}"}, timeout=10
+                    ).json()
+                    if msgs and len(msgs) > 0:
+                        requests.put(
+                            f"https://discord.com/api/v10/channels/1471200792945098955/pins/{msgs[0]['id']}",
+                            headers={"Authorization": f"Bot {bot_token}"}, timeout=10
+                        )
+            except:
+                pass
     except:
         pass
 
@@ -347,7 +366,7 @@ def process_signal(symbol, signal, price, phase, rsi, strength_score=0, strength
         save_state(state)
         msg = format_trade_msg("OPEN", (pos, reason))
         print(msg)
-        send_discord(msg)
+        send_discord(msg, pin=True)
         return True, reason
     else:
         print(f"⏭️ {symbol}: {reason}")
@@ -360,7 +379,7 @@ def check_and_close():
     for t in closed:
         msg = format_trade_msg("CLOSE", t)
         print(msg)
-        send_discord(msg)
+        send_discord(msg, pin=True)
     
     return closed
 

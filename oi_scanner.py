@@ -2,12 +2,12 @@ import requests
 import os
 import json
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-STATE_FILE = "oi_state.json"
-SIGNAL_LOG = "signal_log.json"
-NOTIFIED_FILE = "oi_notified.json"
-FLASH_STATE = os.path.expanduser("~/.openclaw/flash_crash_state.json")
+STATE_FILE = os.path.expanduser("~/.openclaw/oi_state_local_v2.json")
+SIGNAL_LOG = os.path.expanduser("~/.openclaw/oi_signals_local_v2.json")
+NOTIFIED_FILE = os.path.expanduser("~/.openclaw/oi_notified_local_v2.json")
 
 def load_json(filepath):
     try:
@@ -18,6 +18,7 @@ def load_json(filepath):
 
 def save_json(filepath, data):
     try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
@@ -29,63 +30,34 @@ def format_number(n):
     elif n >= 1e3: return f"{n/1e3:.1f}K"
     return f"{n:.0f}"
 
-def get_okx_oi_data():
-    results = []
-    
+def get_all_tickers():
     try:
-        url = "https://www.okx.com/api/v5/market/tickers?instType=SWAP"
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         r = requests.get(url, timeout=15)
-        data = r.json()
-        if data.get("code") != "0":
-            return results
-        
-        swap_data = {}
-        for t in data["data"]:
-            if "-USDT-SWAP" in t["instId"]:
-                base = t["instId"].replace("-USDT-SWAP", "")
-                open_price = float(t.get("open24h", 0))
-                swap_data[base] = {
-                    "price": float(t["last"]),
-                    "change_24h": (float(t["last"]) / open_price * 100 - 100) if open_price > 0 else 0,
-                    "volume": float(t.get("volCcy24h", 0))
-                }
+        if r.status_code == 200:
+            return [t for t in r.json() if t["symbol"].endswith("USDT")]
     except Exception as e:
         print(f"Ticker error: {e}")
-        return results
-    
+    return []
+
+def get_oi_for_symbol(symbol):
     try:
-        url = "https://www.okx.com/api/v5/public/open-interest?instType=SWAP"
-        r = requests.get(url, timeout=15)
-        data = r.json()
-        if data.get("code") != "0":
-            return results
-        
-        for item in data["data"]:
-            if "-USDT-SWAP" in item["instId"]:
-                base = item["instId"].replace("-USDT-SWAP", "")
-                if base in swap_data:
-                    oi_usd = float(item.get("oiCcy", 0)) * swap_data[base]["price"]
-                    results.append({
-                        "symbol": base,
-                        "price": swap_data[base]["price"],
-                        "change_24h": swap_data[base]["change_24h"],
-                        "volume": swap_data[base]["volume"],
-                        "oi": oi_usd
-                    })
-    except Exception as e:
-        print(f"OI error: {e}")
-    
-    return results
+        url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            return symbol, float(r.json().get("openInterest", 0))
+    except:
+        pass
+    return symbol, 0
 
 def get_oi_change_1h(symbol):
     try:
-        url = f"https://www.okx.com/api/v5/rubik/stat/contracts/open-interest-history?instId={symbol}-USDT-SWAP&period=1H"
-        r = requests.get(url, timeout=10)
+        url = f"https://fapi.binance.com/futures/data/openInterestHist?symbol={symbol}&period=1h&limit=2"
+        r = requests.get(url, timeout=5)
         data = r.json()
-        if data.get("code") == "0" and len(data.get("data", [])) >= 2:
-            sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-            old_oi = float(sorted_data[-2][3])
-            new_oi = float(sorted_data[-1][3])
+        if isinstance(data, list) and len(data) >= 2:
+            old_oi = float(data[0]["sumOpenInterestValue"])
+            new_oi = float(data[1]["sumOpenInterestValue"])
             change = (new_oi - old_oi) / old_oi * 100 if old_oi > 0 else 0
             return change, new_oi
     except:
@@ -94,14 +66,13 @@ def get_oi_change_1h(symbol):
 
 def get_price_change_1h(symbol):
     try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=1H&limit=2"
-        r = requests.get(url, timeout=10)
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=2"
+        r = requests.get(url, timeout=5)
         data = r.json()
-        if data.get("code") == "0" and len(data.get("data", [])) >= 2:
-            sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-            old_price = float(sorted_data[-2][4])
-            new_price = float(sorted_data[-1][4])
-            return (new_price - old_price) / old_price * 100 if old_price > 0 else 0
+        if isinstance(data, list) and len(data) >= 2:
+            old_close = float(data[-2][4])
+            new_close = float(data[-1][4])
+            return (new_close - old_close) / old_close * 100 if old_close > 0 else 0
     except:
         pass
     return 0
@@ -109,7 +80,7 @@ def get_price_change_1h(symbol):
 MC_CACHE = {}
 
 def get_market_cap(symbol):
-    base = symbol.replace("-USDT-SWAP", "").replace("USDT", "").lower()
+    base = symbol.replace("USDT", "").lower()
     
     if base in MC_CACHE:
         return MC_CACHE[base]
@@ -141,19 +112,18 @@ def get_market_cap(symbol):
 
 def detect_early_momentum(symbol):
     try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=5m&limit=13"
-        r = requests.get(url, timeout=10)
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=13"
+        r = requests.get(url, timeout=5)
         data = r.json()
-        if data.get("code") != "0" or len(data.get("data", [])) < 13:
+        if not isinstance(data, list) or len(data) < 13:
             return None
         
-        sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-        volumes = [float(k[5]) for k in sorted_data[:-1]]
+        volumes = [float(k[7]) for k in data[:-1]]
         avg_vol = sum(volumes) / len(volumes)
         
-        latest = sorted_data[-1]
-        prev = sorted_data[-2]
-        latest_vol = float(latest[5])
+        latest = data[-1]
+        prev = data[-2]
+        latest_vol = float(latest[7])
         latest_close = float(latest[4])
         prev_close = float(prev[4])
         
@@ -170,6 +140,8 @@ def detect_early_momentum(symbol):
         pass
     return None
 
+FLASH_STATE = os.path.expanduser("~/.openclaw/flash_crash_state.json")
+
 def detect_flash_crash(symbols_data):
     flash_state = load_json(FLASH_STATE)
     if not isinstance(flash_state, dict):
@@ -181,19 +153,19 @@ def detect_flash_crash(symbols_data):
     
     for sym_data in symbols_data:
         symbol = sym_data["symbol"]
+        base = symbol.replace("USDT", "")
         try:
-            url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=5m&limit=13"
-            r = requests.get(url, timeout=10)
+            url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit=13"
+            r = requests.get(url, timeout=5)
             data = r.json()
-            if data.get("code") != "0" or len(data.get("data", [])) < 13:
+            if not isinstance(data, list) or len(data) < 13:
                 continue
             
-            sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-            volumes = [float(k[5]) for k in sorted_data[:-1]]
+            volumes = [float(k[7]) for k in data[:-1]]
             avg_vol = sum(volumes) / len(volumes) if volumes else 0
             
-            latest = sorted_data[-1]
-            latest_vol = float(latest[5])
+            latest = data[-1]
+            latest_vol = float(latest[7])
             latest_open = float(latest[1])
             latest_close = float(latest[4])
             latest_low = float(latest[3])
@@ -206,7 +178,7 @@ def detect_flash_crash(symbols_data):
             is_hard_crash = wick_drop <= -8 and vol_ratio >= 3
             
             if is_crash or is_hard_crash:
-                prev_ts = flash_state.get(symbol, {}).get("ts", "2000-01-01T00:00:00")
+                prev_ts = flash_state.get(base, {}).get("ts", "2000-01-01T00:00:00")
                 prev_time = datetime.fromisoformat(prev_ts)
                 if hasattr(prev_time, 'tzinfo') and prev_time.tzinfo is None:
                     prev_time = prev_time.replace(tzinfo=tw_tz)
@@ -215,14 +187,14 @@ def detect_flash_crash(symbols_data):
                 if time_diff > 600:
                     crash_type = "硬閃崩" if is_hard_crash and wick_drop <= -8 else "閃崩"
                     crashes.append({
-                        "symbol": symbol,
+                        "symbol": base,
                         "price": latest_close,
                         "drop": drop,
                         "wick_drop": wick_drop,
                         "vol_ratio": vol_ratio,
                         "type": crash_type
                     })
-                    flash_state[symbol] = {"ts": now.isoformat(), "drop": drop}
+                    flash_state[base] = {"ts": now.isoformat(), "drop": drop}
         except:
             continue
     
@@ -238,11 +210,7 @@ def send_flash_alerts(crashes):
     lines = [f"💥 **閃崩警報** | {now}", ""]
     for c in crashes:
         emoji = "🔻🔻" if c["wick_drop"] <= -8 else "🔻"
-        price = c["price"]
-        if price < 1:
-            lines.append(f"{emoji} **{c['symbol']}** ${price:.4f}")
-        else:
-            lines.append(f"{emoji} **{c['symbol']}** ${price:,.2f}")
+        lines.append(f"{emoji} **{c['symbol']}** ${c['price']:.4f}" if c['price'] < 1 else f"{emoji} **{c['symbol']}** ${c['price']:,.2f}")
         lines.append(f"  5分鐘跌幅: {c['drop']:+.1f}% (最低: {c['wick_drop']:+.1f}%)")
         lines.append(f"  成交量: {c['vol_ratio']:.1f}x 爆量 | 類型: {c['type']}")
         lines.append(f"  ⚠️ 可能繼續下殺或洗盤反彈")
@@ -254,14 +222,13 @@ def send_flash_alerts(crashes):
 
 def get_market_phase(symbol):
     try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=1H&limit=26"
-        r = requests.get(url, timeout=10)
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=1h&limit=26"
+        r = requests.get(url, timeout=5)
         data = r.json()
-        if data.get("code") != "0" or len(data.get("data", [])) < 26:
+        if not isinstance(data, list) or len(data) < 26:
             return None
         
-        sorted_data = sorted(data["data"], key=lambda x: int(x[0]))
-        closes = [float(k[4]) for k in sorted_data]
+        closes = [float(k[4]) for k in data]
         current_price = closes[-1]
         
         ma7 = sum(closes[-7:]) / 7
@@ -284,7 +251,13 @@ def get_market_phase(symbol):
         price_range = high_24h - low_24h
         price_position = (current_price - low_24h) / price_range * 100 if price_range > 0 else 50
         
-        return {"rsi": rsi, "ma_distance": ma_distance, "price_position": price_position}
+        return {
+            "rsi": rsi,
+            "ma_distance": ma_distance,
+            "price_position": price_position,
+            "ma7": ma7,
+            "ma25": ma25
+        }
     except:
         pass
     return None
@@ -292,7 +265,11 @@ def get_market_phase(symbol):
 def get_phase_label(phase_data, signal):
     if not phase_data:
         return ""
-    rsi, ma_dist, pos = phase_data["rsi"], phase_data["ma_distance"], phase_data["price_position"]
+    
+    rsi = phase_data["rsi"]
+    ma_dist = phase_data["ma_distance"]
+    pos = phase_data["price_position"]
+    
     if signal == "LONG":
         if rsi > 75 or ma_dist > 15 or pos > 90:
             return "⚠️高位追高"
@@ -309,16 +286,16 @@ def get_phase_label(phase_data, signal):
             return "🌱啟動初期"
     return ""
 
-def get_1h_volume_ratio_okx(symbol):
+def get_1h_volume_ratio(symbol):
     try:
-        url = f"https://www.okx.com/api/v5/market/candles?instId={symbol}-USDT-SWAP&bar=1H&limit=24"
-        r = requests.get(url, timeout=10)
+        url = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}USDT&interval=1h&limit=24"
+        r = requests.get(url, timeout=5)
         data = r.json()
-        if data.get("code") == "0" and data.get("data"):
-            vols = [float(k[5]) for k in reversed(data["data"])]
-            if len(vols) >= 6:
-                avg_vol = sum(vols[:-1]) / len(vols[:-1])
-                return vols[-1] / avg_vol if avg_vol > 0 else 1
+        if isinstance(data, list) and len(data) >= 6:
+            vols = [float(k[5]) for k in data]
+            avg_vol = sum(vols[:-1]) / len(vols[:-1])
+            last_vol = vols[-1]
+            return last_vol / avg_vol if avg_vol > 0 else 1
     except:
         pass
     return 1
@@ -369,6 +346,22 @@ def get_signal_strength(oi_change, vol_ratio, rsi, signal, price_change_1h):
     
     return {"score": score, "grade": grade, "tags": tags}
 
+def get_spot_cvd(symbol, periods=6):
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}USDT&interval=5m&limit={periods}"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if isinstance(data, list) and len(data) >= 3:
+            cvd = 0
+            for k in data:
+                buy_vol = float(k[9])
+                sell_vol = float(k[5]) - buy_vol
+                cvd += (buy_vol - sell_vol)
+            return cvd
+    except:
+        pass
+    return None
+
 def get_direction_signal(oi_change, price_change_1h):
     if oi_change > 5 and price_change_1h > 3:
         return "LONG", "強勢建倉"
@@ -392,7 +385,7 @@ def signal_emoji(signal):
         "NONE": "⚪ 無訊號"
     }.get(signal, signal)
 
-def format_message(alerts, scanned, is_smallcap=False):
+def format_message(alerts, scanned):
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
     
@@ -402,8 +395,7 @@ def format_message(alerts, scanned, is_smallcap=False):
     early_count = len([a for a in alerts if a.get("early_warning")])
     oi_count = len(alerts) - early_count
     
-    title = "🚀 **小幣大波動 [OKX雲端]**" if is_smallcap else "🔍 **OI 異動掃描 [OKX雲端]**"
-    lines = [f"{title} | {now}", f"掃描 {scanned} 幣種 | 早期⚡{early_count} OI📊{oi_count}", ""]
+    lines = [f"🔍 **OI 異動掃描** [BN本地] | {now}", f"掃描 {scanned} 幣種 | 早期⚡{early_count} OI📊{oi_count}", ""]
     
     for a in alerts[:10]:
         surge = "🔥" if a.get("aggressive") else ("⚡" if a.get("momentum_surge") or a.get("early_warning") else "")
@@ -419,19 +411,21 @@ def format_message(alerts, scanned, is_smallcap=False):
         else:
             oi_dir = "📈" if a.get("oi_change", 0) > 0 else "📉"
             price_dir = "📈" if a.get("price_change_1h", 0) > 0 else "📉"
-            oi_line = f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a['oi'])})"
-            mc = get_market_cap(a['symbol'])
-            if mc and mc > 0:
-                oi_mc_ratio = a.get('oi', 0) / mc * 100
-                oi_line += f" | OI/MC: {oi_mc_ratio:.1f}%"
-            lines.append(oi_line)
-            lines.append(f"• 價格 1H: {price_dir} {a['price_change_1h']:+.1f}% | 24H: {a['change_24h']:+.1f}%")
+            if a.get("oi_change"):
+                oi_line = f"• OI: {oi_dir} {a['oi_change']:+.1f}% ({format_number(a.get('oi', 0))})"
+                mc = get_market_cap(a['symbol'] + "USDT")
+                if mc and mc > 0:
+                    oi_mc_ratio = a.get('oi', 0) / mc * 100
+                    oi_line += f" | OI/MC: {oi_mc_ratio:.1f}%"
+                lines.append(oi_line)
+            lines.append(f"• 價格 1H: {price_dir} {a.get('price_change_1h', 0):+.1f}% | 24H: {a['change_24h']:+.1f}%")
         
         reason = "積極信號！" if a.get("aggressive") else ("動能加速！" if a.get("momentum_surge") else a['reason'])
         phase = a.get("phase", "")
         rsi = a.get("rsi", 0)
         grade = a.get("strength_grade", "")
         tags = a.get("strength_tags", [])
+        cvd_tag = a.get("cvd_tag", "")
         
         signal_line = f"• 訊號: {signal_emoji(a['signal'])}"
         if phase:
@@ -440,6 +434,8 @@ def format_message(alerts, scanned, is_smallcap=False):
             signal_line += f" | {grade}"
         if rsi:
             signal_line += f" | RSI: {rsi:.0f}"
+        if cvd_tag:
+            signal_line += f" | {cvd_tag}"
         lines.append(signal_line)
         
         if tags:
@@ -473,14 +469,15 @@ def log_signals(alerts):
                 "symbol": a["symbol"],
                 "signal": a["signal"],
                 "entry_price": a["price"],
-                "oi_change": round(a["oi_change"], 2),
-                "oi_change_pct": round(a["oi_change"], 2),
-                "price_change_1h": round(a["price_change_1h"], 2),
-                "vol_ratio": round(a.get("1h_vol_ratio", 1), 2),
-                "rsi": round(a.get("rsi", 50), 1),
+                "oi_change": a.get("oi_change", 0),
+                "oi_change_pct": a.get("oi_change", 0),
+                "price_change_1h": a["price_change_1h"],
+                "vol_ratio": a.get("1h_vol_ratio", 1),
+                "rsi": a.get("rsi", 50),
                 "strength_score": a.get("strength_score", 0),
                 "strength_grade": a.get("strength_grade", ""),
-                "checked": False
+                "cvd_tag": a.get("cvd_tag", ""),
+                "source": "binance"
             })
     
     cutoff = now - timedelta(days=7)
@@ -572,143 +569,190 @@ def filter_new_or_consistent(alerts):
     return filtered
 
 def main():
-    print("=== OI Scanner Start ===")
+    print("=== OI Scanner (Binance Local) ===")
     
-    prev_state = load_json(STATE_FILE)
-    current_data = get_okx_oi_data()
-    
-    if not current_data:
-        print("No data")
+    tickers = get_all_tickers()
+    if not tickers:
+        print("No tickers")
         return
     
-    print(f"獲取 {len(current_data)} 個幣種")
+    print(f"獲取 {len(tickers)} 個幣種")
     
-    sorted_by_vol = sorted(current_data, key=lambda x: x["volume"], reverse=True)
-    top_100 = set(c["symbol"] for c in sorted_by_vol[:100])
+    prev_state = load_json(STATE_FILE)
+    
+    candidates = []
+    for t in tickers:
+        symbol = t["symbol"]
+        price = float(t["lastPrice"])
+        change_24h = float(t["priceChangePercent"])
+        volume = float(t["quoteVolume"])
+        
+        if volume < 1000000:
+            continue
+        
+        if abs(change_24h) >= 10:
+            candidates.append({
+                "symbol": symbol.replace("USDT", ""),
+                "full_symbol": symbol,
+                "price": price,
+                "change_24h": change_24h,
+                "volume": volume
+            })
+    
+    print(f"篩選出 {len(candidates)} 個候選幣種 (24H變動>10%)")
+    
+    high_vol_coins = sorted(tickers, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
+    early_alerts = []
     
     print("掃描閃崩信號...")
-    flash_candidates = [{"symbol": c["symbol"]} for c in sorted_by_vol[:100]]
+    flash_candidates = [{"symbol": t["symbol"]} for t in high_vol_coins[:100]]
     crashes = detect_flash_crash(flash_candidates)
     if crashes:
         print(f"💥 偵測到 {len(crashes)} 個閃崩!")
         send_flash_alerts(crashes)
     
-    early_alerts = []
     print("掃描早期動能信號...")
-    for coin in sorted_by_vol[:30]:
-        momentum = detect_early_momentum(coin["symbol"])
+    for t in high_vol_coins[:30]:
+        symbol = t["symbol"]
+        base = symbol.replace("USDT", "")
+        momentum = detect_early_momentum(symbol)
         if momentum:
             early_alerts.append({
-                "symbol": coin["symbol"],
-                "price": coin["price"],
-                "oi": coin["oi"],
+                "symbol": base,
+                "price": float(t["lastPrice"]),
+                "oi": 0,
                 "oi_change": 0,
                 "price_change_1h": 0,
                 "price_change_5m": momentum["price_change_5m"],
                 "vol_ratio": momentum["vol_ratio"],
-                "change_24h": coin["change_24h"],
+                "change_24h": float(t["priceChangePercent"]),
                 "signal": f"EARLY_{momentum['direction']}",
                 "reason": f"5分鐘爆量 {momentum['vol_ratio']:.1f}x",
                 "early_warning": True
             })
-            print(f"⚡ [早期] {coin['symbol']}: 5m {momentum['price_change_5m']:+.1f}%, Vol {momentum['vol_ratio']:.1f}x")
+            print(f"⚡ [早期] {base}: 5m {momentum['price_change_5m']:+.1f}%, Vol {momentum['vol_ratio']:.1f}x")
     
+    alerts = []
     current_state = {}
-    top_alerts = []
-    smallcap_alerts = []
     
-    for coin in sorted_by_vol[:80]:
-        symbol = coin["symbol"]
-        current_state[symbol] = {"oi": coin["oi"], "price": coin["price"]}
+    for coin in candidates[:80]:
+        symbol = coin["full_symbol"]
+        base = coin["symbol"]
         
         oi_change, oi_usd = get_oi_change_1h(symbol)
-        if oi_usd > 0:
-            coin["oi"] = oi_usd
+        if oi_usd == 0:
+            _, oi = get_oi_for_symbol(symbol)
+            oi_usd = oi * coin["price"]
         
-        is_top = symbol in top_100
-        
-        if is_top:
-            threshold_oi = 5
-            threshold_price = 5
-        else:
-            threshold_oi = 8
-            threshold_price = 15
-        
-        if abs(oi_change) < threshold_oi and abs(coin["change_24h"]) < threshold_price:
-            continue
+        current_state[base] = {"oi": oi_usd, "price": coin["price"]}
         
         price_change_1h = get_price_change_1h(symbol)
         signal, reason = get_direction_signal(oi_change, price_change_1h)
         
-        effective_dir = signal
-        if signal == "SHAKEOUT":
-            effective_dir = "SHORT"
-        elif signal == "SQUEEZE":
-            effective_dir = "LONG"
-        
-        phase_data = get_market_phase(symbol) if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"] else None
-        phase_label = get_phase_label(phase_data, effective_dir) if phase_data else ""
-        rsi_val = phase_data["rsi"] if phase_data else 50
-        
-        vol_1h = 1
         if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"]:
-            vol_1h = get_1h_volume_ratio_okx(symbol)
-        strength = get_signal_strength(oi_change, vol_1h, rsi_val, effective_dir, price_change_1h)
-        
-        alert = {
-            "symbol": symbol,
-            "price": coin["price"],
-            "oi": coin["oi"],
-            "oi_change": oi_change,
-            "price_change_1h": price_change_1h,
-            "change_24h": coin["change_24h"],
-            "signal": signal,
-            "reason": reason,
-            "phase": phase_label,
-            "rsi": rsi_val,
-            "1h_vol_ratio": vol_1h,
-            "strength_score": strength["score"],
-            "strength_grade": strength["grade"],
-            "strength_tags": strength["tags"]
-        }
-        
-        if is_top:
-            if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"] or (signal == "PENDING" and abs(oi_change) >= 8):
-                top_alerts.append(alert)
-                print(f"🚨 [TOP] {symbol}: OI {oi_change:+.1f}%, 1H {price_change_1h:+.1f}% → {signal_emoji(signal)}")
-        else:
-            if signal in ["LONG", "SHORT", "SHAKEOUT", "SQUEEZE"] and abs(oi_change) >= 8:
-                smallcap_alerts.append(alert)
-                print(f"🚀 [SMALL] {symbol}: OI {oi_change:+.1f}%, 24H {coin['change_24h']:+.1f}% → {signal_emoji(signal)}")
+            phase = get_market_phase(symbol)
+            phase_label = get_phase_label(phase, signal if signal in ["LONG","SHORT"] else ("LONG" if signal=="SQUEEZE" else "SHORT"))
+            rsi_val = phase["rsi"] if phase else 50
+            vol_1h = get_1h_volume_ratio(base)
+            cvd = get_spot_cvd(base)
+            
+            cvd_tag = ""
+            if cvd is not None:
+                if signal == "LONG" and cvd < 0:
+                    cvd_tag = "⚠️CVD背離"
+                elif signal == "SHORT" and cvd > 0:
+                    cvd_tag = "⚠️CVD背離"
+                elif signal == "LONG" and cvd > 0:
+                    cvd_tag = "✅CVD確認"
+                elif signal == "SHORT" and cvd < 0:
+                    cvd_tag = "✅CVD確認"
+            
+            effective_signal = signal
+            if signal == "SHAKEOUT":
+                effective_signal = "SHAKEOUT"
+            elif signal == "SQUEEZE":
+                effective_signal = "SQUEEZE"
+            
+            strength = get_signal_strength(oi_change, vol_1h, rsi_val, signal, price_change_1h)
+            alerts.append({
+                "symbol": base,
+                "price": coin["price"],
+                "oi": oi_usd,
+                "oi_change": oi_change,
+                "price_change_1h": price_change_1h,
+                "change_24h": coin["change_24h"],
+                "signal": effective_signal,
+                "reason": reason,
+                "phase": phase_label,
+                "rsi": rsi_val,
+                "1h_vol_ratio": vol_1h,
+                "cvd_tag": cvd_tag,
+                "strength_score": strength["score"],
+                "strength_grade": strength["grade"],
+                "strength_tags": strength["tags"]
+            })
+        elif signal in ["WAIT", "PENDING"] and abs(oi_change) > 8:
+            alerts.append({
+                "symbol": base,
+                "price": coin["price"],
+                "oi": oi_usd,
+                "oi_change": oi_change,
+                "price_change_1h": price_change_1h,
+                "change_24h": coin["change_24h"],
+                "signal": signal,
+                "reason": reason,
+                "phase": "",
+                "rsi": 0
+            })
+            print(f"🚨 {base}: 24H {coin['change_24h']:+.1f}%, 1H {price_change_1h:+.1f}%, OI {oi_change:+.1f}%")
+    
+    for base, data in prev_state.items():
+        if base not in current_state:
+            current_state[base] = data
     
     save_json(STATE_FILE, current_state)
     
-    top_alerts.sort(key=lambda x: x.get("strength_score", 0), reverse=True)
-    smallcap_alerts.sort(key=lambda x: x.get("strength_score", 0), reverse=True)
+    all_alerts = early_alerts + alerts
+    all_alerts.sort(key=lambda x: x.get("strength_score", 0) + abs(x.get("price_change_5m", 0)) * 3, reverse=True)
     
-    all_oi_alerts = top_alerts + smallcap_alerts
-    log_signals(all_oi_alerts)
-    print(f"偵測到 {len(all_oi_alerts)} 個OI訊號, {len(early_alerts)} 個早期訊號")
+    log_signals([a for a in all_alerts if not a.get("early_warning")])
+    print(f"偵測到 {len(all_alerts)} 個訊號 (早期:{len(early_alerts)}, OI:{len(alerts)})")
     
-    combined_top = early_alerts + top_alerts
-    top_actionable = [a for a in combined_top if a["signal"] in ["LONG", "SHORT", "PENDING", "EARLY_LONG", "EARLY_SHORT"]]
-    top_filtered = filter_new_or_consistent(top_actionable)
-    if top_filtered:
-        msg = format_message(top_filtered, 100, is_smallcap=False)
-        print("\n" + msg)
-        send_discord(msg)
+    filtered_alerts = filter_new_or_consistent(all_alerts)
+    print(f"過濾後 {len(filtered_alerts)} 個需通知（新訊號或方向一致）")
     
-    smallcap_actionable = [a for a in smallcap_alerts if a["signal"] in ["LONG", "SHORT"]]
-    smallcap_filtered = filter_new_or_consistent(smallcap_actionable)
-    if smallcap_filtered:
-        msg = format_message(smallcap_filtered, len(current_data) - 100, is_smallcap=True)
-        print("\n" + msg)
-        send_discord(msg)
-    
-    print(f"過濾後通知: Top {len(top_filtered)}, Small {len(smallcap_filtered)}")
-    
-    if not top_filtered and not smallcap_filtered:
-        print(f"掃描 {len(current_data)} 幣種，無新訊號或方向已改變")
+    if filtered_alerts:
+        message = format_message(filtered_alerts, len(tickers))
+        print("\n" + message)
+        send_discord(message)
+        
+        try:
+            from paper_trader import process_signal, check_and_close
+            
+            check_and_close()
+            
+            for a in filtered_alerts:
+                if a["signal"] in ["LONG", "SHORT"]:
+                    process_signal(
+                        a["symbol"],
+                        a["signal"],
+                        a["price"],
+                        a.get("phase", ""),
+                        a.get("rsi", 50),
+                        a.get("strength_score", 0),
+                        a.get("strength_grade", ""),
+                        a.get("1h_vol_ratio", 1)
+                    )
+        except Exception as e:
+            print(f"Paper trading error: {e}")
+    else:
+        print(f"掃描 {len(tickers)} 幣種，無新訊號或方向已改變")
+        
+        try:
+            from paper_trader import check_and_close
+            check_and_close()
+        except:
+            pass
 
 if __name__ == "__main__":
     main()

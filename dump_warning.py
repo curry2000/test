@@ -1,63 +1,53 @@
-import requests
+"""
+暴跌預警系統
+偵測高位背離、假突破、量能枯竭等預警信號
+"""
 import os
 import json
-from datetime import datetime, timezone, timedelta
+import time
+from datetime import datetime
 
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
-STATE_FILE = os.path.expanduser("~/.openclaw/dump_warning_state.json")
-CHANNEL_ID = "1471200792945098955"
+# 使用共用模組
+from config import (
+    DUMP_WARNING_STATE_FILE,
+    TW_TIMEZONE
+)
+from exchange_api import get_klines, get_all_tickers
+from notify import send_discord_message
 
-def get_bot_token():
-    try:
-        with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
-            config = json.load(f)
-        return config.get("channels", {}).get("discord", {}).get("token", "")
-    except:
-        return ""
 
 def load_state():
+    """載入狀態"""
     try:
-        with open(STATE_FILE, "r") as f:
+        with open(DUMP_WARNING_STATE_FILE, "r") as f:
             return json.load(f)
     except:
         return {}
 
+
 def save_state(state):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    """儲存狀態"""
+    os.makedirs(os.path.dirname(DUMP_WARNING_STATE_FILE), exist_ok=True)
+    with open(DUMP_WARNING_STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
-def send_discord(message):
-    if not DISCORD_WEBHOOK:
-        print("No webhook")
-        return
-    try:
-        r = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
-        print(f"Discord: {r.status_code}")
-    except Exception as e:
-        print(f"Error: {e}")
-
-def get_klines(symbol, interval, limit):
-    try:
-        r = requests.get(f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval={interval}&limit={limit}", timeout=10)
-        d = r.json()
-        if isinstance(d, list):
-            return [{"t":int(k[0]),"o":float(k[1]),"h":float(k[2]),"l":float(k[3]),"c":float(k[4]),"v":float(k[5])} for k in d]
-    except:
-        pass
-    return []
 
 def calc_rsi_series(closes, period=14):
+    """計算 RSI 序列"""
     if len(closes) < period+1:
         return [50]*len(closes)
+    
     rsis = [50]*period
     gains, losses = [], []
+    
     for i in range(1, period+1):
         d = closes[i]-closes[i-1]
         gains.append(d if d>0 else 0)
         losses.append(-d if d<0 else 0)
+    
     ag = sum(gains)/period
     al = sum(losses)/period
+    
     for i in range(period, len(closes)):
         d = closes[i]-closes[i-1]
         g = d if d>0 else 0
@@ -65,24 +55,35 @@ def calc_rsi_series(closes, period=14):
         ag = (ag*(period-1)+g)/period
         al = (al*(period-1)+l)/period
         rsis.append(100 if al==0 else 100-(100/(1+ag/al)))
+    
     return rsis
 
+
 def get_top_coins(limit=50):
+    """取得交易量前 N 名的幣種"""
     try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
-        data = r.json()
-        if not isinstance(data, list):
+        tickers = get_all_tickers()
+        if not tickers:
             return []
-        usdt = [d for d in data if d["symbol"].endswith("USDT")]
-        usdt.sort(key=lambda x: float(x.get("quoteVolume", 0)), reverse=True)
-        return [d["symbol"] for d in usdt[:limit]]
+        
+        # 按交易量排序
+        tickers.sort(key=lambda x: x.get("volume_24h", 0), reverse=True)
+        
+        return [t["symbol"] for t in tickers[:limit]]
     except:
         return []
 
+
 def scan_coin(symbol, candles_1h_map=None):
-    c5 = get_klines(symbol, "5m", 60)
-    if len(c5) < 40:
+    """掃描單個幣種的下跌預警信號"""
+    # 取得 5 分鐘 K 線
+    klines = get_klines(symbol, "5m", 60)
+    if not klines or len(klines) < 40:
         return None
+    
+    # 轉換格式
+    c5 = [{"t": k["open_time"], "o": k["open"], "h": k["high"],
+           "l": k["low"], "c": k["close"], "v": k["volume"]} for k in klines]
 
     closes = [c["c"] for c in c5]
     highs = [c["h"] for c in c5]
@@ -93,6 +94,7 @@ def scan_coin(symbol, candles_1h_map=None):
     rsi_now = rsis[i]
     price_now = closes[i]
 
+    # 過濾：只看 RSI > 65 的（高位）
     if rsi_now < 65:
         return None
 
@@ -100,6 +102,7 @@ def scan_coin(symbol, candles_1h_map=None):
     signals = []
     lb = min(36, i)
 
+    # 檢查 RSI 背離
     w_rsi = rsis[max(0,i-lb):i+1]
     w_high = highs[max(0,i-lb):i+1]
 
@@ -117,6 +120,7 @@ def scan_coin(symbol, candles_1h_map=None):
                 score += 25
                 signals.append(f"RSI背離(差{div:.0f})")
 
+    # 檢查假突破（長上影線）
     for c in c5[-7:]:
         wick = (c["h"] - max(c["o"],c["c"])) / c["o"] * 100
         body = abs(c["c"]-c["o"])/c["o"]*100
@@ -129,6 +133,7 @@ def scan_coin(symbol, candles_1h_map=None):
             signals.append(f"沖高回落(影{wick:.1f}%)")
             break
 
+    # 檢查量能枯竭
     if i >= 12:
         first = sum(volumes[i-12:i-6])/6
         second = sum(volumes[i-6:i+1])/7
@@ -141,6 +146,7 @@ def scan_coin(symbol, candles_1h_map=None):
                 score += 15
                 signals.append(f"量萎縮({ratio:.2f}x)")
 
+    # 檢查連續紅 K
     red_count = sum(1 for j in range(max(0,i-4),i+1) if c5[j]["c"] < c5[j]["o"])
     if red_count >= 4:
         score += 25
@@ -151,12 +157,14 @@ def scan_coin(symbol, candles_1h_map=None):
             score += 15
             signals.append(f"連3紅跌{drop:.1f}%")
 
+    # RSI 極高
     if rsi_now > 85:
         score += 15
         signals.append(f"RSI極高{rsi_now:.0f}")
     elif rsi_now > 75:
         score += 8
 
+    # 高位盤整
     if i >= 24:
         rng_h = max(closes[i-24:i+1])
         rng_l = min(closes[i-24:i+1])
@@ -164,9 +172,13 @@ def scan_coin(symbol, candles_1h_map=None):
             score += 15
             signals.append("高位盤整")
 
+    # 1H RSI 檢查
     c1h = candles_1h_map.get(symbol) if candles_1h_map else None
     if not c1h:
-        c1h = get_klines(symbol, "1h", 30)
+        klines_1h = get_klines(symbol, "1h", 30)
+        if klines_1h:
+            c1h = [{"c": k["close"]} for k in klines_1h]
+    
     if c1h and len(c1h) > 15:
         rsi_1h = calc_rsi_series([c["c"] for c in c1h])
         if len(rsi_1h) >= 3:
@@ -179,6 +191,7 @@ def scan_coin(symbol, candles_1h_map=None):
                 score += 10
                 signals.append(f"1H超買{r1h:.0f}")
 
+    # 評級
     if score >= 55 and len(signals) >= 2:
         name = symbol.replace("USDT", "")
         grade = ""
@@ -205,11 +218,13 @@ def scan_coin(symbol, candles_1h_map=None):
 
     return None
 
+
 def main():
-    tw_tz = timezone(timedelta(hours=8))
-    now = datetime.now(tw_tz)
+    """主程序"""
+    now = datetime.now(TW_TIMEZONE)
     state = load_state()
 
+    # 取得交易量前 80 的幣種
     coins = get_top_coins(80)
     if not coins:
         print("Failed to get coin list")
@@ -217,16 +232,16 @@ def main():
 
     print(f"Scanning {len(coins)} coins for dump warnings...")
 
+    # 取得所有幣種的 24H 價格變化
     try:
-        r = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr", timeout=10)
-        ticker_data = r.json()
+        all_tickers = get_all_tickers()
         price_changes = {}
-        if isinstance(ticker_data, list):
-            for t in ticker_data:
-                price_changes[t["symbol"]] = float(t.get("priceChangePercent", 0))
+        for t in all_tickers:
+            price_changes[t["symbol"]] = t.get("price_change_pct", 0)
     except:
         price_changes = {}
 
+    # 預篩選：優先掃描 24H 漲幅 > 10% 的幣種
     candidates = []
     for sym in coins:
         chg = price_changes.get(sym, 0)
@@ -238,7 +253,7 @@ def main():
 
     print(f"  Pre-filter: {len(candidates)} coins with 24H change > 10%")
 
-    import time
+    # 掃描每個幣種
     alerts = []
     for sym in candidates:
         try:
@@ -246,6 +261,8 @@ def main():
             if result:
                 key = f"{result['symbol']}_dump"
                 last = state.get(key, "")
+                
+                # 檢查冷卻時間（1小時）
                 if last:
                     try:
                         lt = datetime.fromisoformat(last)
@@ -258,15 +275,17 @@ def main():
                 alerts.append(result)
                 state[key] = now.isoformat()
                 print(f"  {result['emoji']} {result['symbol']} ${result['price']:.4f} 分{result['score']} {result['grade']} | {', '.join(result['signals'])}")
-            time.sleep(0.1)
+            
+            time.sleep(0.1)  # Rate limit
         except Exception as e:
             print(f"  {sym} error: {e}")
 
+    # 發送通知
     if alerts:
         alerts.sort(key=lambda x: x["score"], reverse=True)
 
         lines = [f"⚠️ **下跌預警** | {now.strftime('%m/%d %H:%M')}\n"]
-        for a in alerts[:8]:
+        for a in alerts[:8]:  # 最多顯示 8 個
             sig_text = " + ".join(a["signals"][:3])
             lines.append(
                 f"{a['emoji']} **{a['symbol']}** ${a['price']:,.4f} | "
@@ -277,11 +296,12 @@ def main():
 
         msg = "\n".join(lines)
         print(f"\n{msg}")
-        send_discord(msg)
+        send_discord_message(msg)
     else:
         print("No dump warnings")
 
     save_state(state)
+
 
 if __name__ == "__main__":
     main()
