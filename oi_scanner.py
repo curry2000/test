@@ -30,12 +30,40 @@ def format_number(n):
     elif n >= 1e3: return f"{n/1e3:.1f}K"
     return f"{n:.0f}"
 
+def get_trading_symbols():
+    """取得正在交易中的合約符號，過濾掉 SETTLING（清算中）的幣種"""
+    try:
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        r = requests.get(url, timeout=15)
+        if r.status_code == 200:
+            symbols = set()
+            settling = 0
+            for s in r.json().get("symbols", []):
+                if s["symbol"].endswith("USDT") and s.get("status") == "TRADING":
+                    symbols.add(s["symbol"])
+                elif s.get("status") == "SETTLING":
+                    settling += 1
+            if settling > 0:
+                print(f"過濾 {settling} 個 SETTLING 幣種")
+            return symbols
+    except Exception as e:
+        print(f"ExchangeInfo error: {e}")
+    return None
+
 def get_all_tickers():
     try:
+        trading_symbols = get_trading_symbols()
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         r = requests.get(url, timeout=15)
         if r.status_code == 200:
-            return [t for t in r.json() if t["symbol"].endswith("USDT")]
+            tickers = [t for t in r.json() if t["symbol"].endswith("USDT")]
+            if trading_symbols:
+                before = len(tickers)
+                tickers = [t for t in tickers if t["symbol"] in trading_symbols]
+                filtered = before - len(tickers)
+                if filtered > 0:
+                    print(f"過濾掉 {filtered} 個非 TRADING 狀態幣種")
+            return tickers
     except Exception as e:
         print(f"Ticker error: {e}")
     return []
