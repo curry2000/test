@@ -205,7 +205,7 @@ def format_message(results):
     """格式化輸出訊息"""
     now = datetime.now(TW_TIMEZONE).strftime("%m/%d %H:%M")
     
-    lines = [f"💼 **倉位建議 [OKX雲端]** | {now}", ""]
+    lines = [f"💼 **倉位建議 [BN本地]** | {now}", ""]
     
     for r in results:
         pnl_emoji = "🟢" if r["pnl_pct"] >= 0 else "🔴"
