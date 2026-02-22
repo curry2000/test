@@ -8,6 +8,7 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = os.path.expanduser("~/.openclaw/oi_state_local_v2.json")
 SIGNAL_LOG = os.path.expanduser("~/.openclaw/oi_signals_local_v2.json")
 NOTIFIED_FILE = os.path.expanduser("~/.openclaw/oi_notified_local_v2.json")
+PENDING_FILE = os.path.expanduser("~/.openclaw/oi_pending_v2.json")
 
 def load_json(filepath):
     try:
@@ -23,6 +24,64 @@ def save_json(filepath, data):
             json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Save error: {e}")
+
+def save_pending_signals(alerts):
+    """記錄 PENDING 蓄勢信號，供下次掃描比較加速"""
+    pending = load_json(PENDING_FILE)
+    if not isinstance(pending, dict):
+        pending = {}
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    
+    for a in alerts:
+        if a.get("signal") == "PENDING":
+            pending[a["symbol"]] = {
+                "oi_change": a.get("oi_change", 0),
+                "price_change_1h": a.get("price_change_1h", 0),
+                "ts": now.isoformat()
+            }
+    
+    # 清掉超過 6 小時的舊記錄
+    cutoff = now - timedelta(hours=6)
+    pending = {k: v for k, v in pending.items() 
+               if datetime.fromisoformat(v["ts"]) > cutoff}
+    save_json(PENDING_FILE, pending)
+
+def check_pending_acceleration(alerts):
+    """檢查 PENDING 信號是否出現加速（OI 持續增加或價格開始突破）"""
+    pending = load_json(PENDING_FILE)
+    if not isinstance(pending, dict):
+        return []
+    
+    accel_alerts = []
+    for a in alerts:
+        symbol = a["symbol"]
+        signal = a.get("signal", "")
+        
+        if symbol in pending:
+            prev = pending[symbol]
+            prev_oi = abs(prev.get("oi_change", 0))
+            curr_oi = abs(a.get("oi_change", 0))
+            prev_price = abs(prev.get("price_change_1h", 0))
+            curr_price = abs(a.get("price_change_1h", 0))
+            
+            # 加速條件：OI 增速加快 或 價格開始突破（從 <2% 變 >3%）
+            oi_accelerating = curr_oi > prev_oi * 1.3
+            price_breaking = prev_price < 2 and curr_price >= 3
+            
+            if oi_accelerating or price_breaking:
+                accel_type = []
+                if oi_accelerating:
+                    accel_type.append(f"OI加速 {prev_oi:.1f}%→{curr_oi:.1f}%")
+                if price_breaking:
+                    accel_type.append(f"價格突破 {prev_price:.1f}%→{curr_price:.1f}%")
+                
+                a["acceleration"] = True
+                a["accel_detail"] = " + ".join(accel_type)
+                accel_alerts.append(a)
+                print(f"🚀 {symbol} 蓄勢加速: {a['accel_detail']}")
+    
+    return accel_alerts
 
 def format_number(n):
     if n >= 1e9: return f"{n/1e9:.1f}B"
@@ -434,6 +493,8 @@ def format_message(alerts, scanned):
     
     for a in alerts[:10]:
         surge = "🔥" if a.get("aggressive") else ("⚡" if a.get("momentum_surge") or a.get("early_warning") else "")
+        if a.get("acceleration"):
+            surge = "🚀加速 " + surge
         
         lines.append(f"**{a['symbol']}** ${a['price']:,.4g} {surge}")
         
@@ -475,6 +536,8 @@ def format_message(alerts, scanned):
         
         if tags:
             lines.append(f"• 強度: {' '.join(tags)}")
+        if a.get("accel_detail"):
+            lines.append(f"• 🚀 蓄勢加速: {a['accel_detail']}")
         lines.append("")
     
     return "\n".join(lines)
@@ -755,7 +818,18 @@ def main():
     all_alerts.sort(key=lambda x: x.get("strength_score", 0) + abs(x.get("price_change_5m", 0)) * 3, reverse=True)
     
     log_signals([a for a in all_alerts if not a.get("early_warning")])
-    print(f"偵測到 {len(all_alerts)} 個訊號 (早期:{len(early_alerts)}, OI:{len(alerts)})")
+    
+    # 檢查 PENDING 蓄勢信號加速
+    accel = check_pending_acceleration(all_alerts)
+    if accel:
+        for a in accel:
+            if a not in all_alerts:
+                all_alerts.append(a)
+    
+    # 記錄當前 PENDING 信號供下次比較
+    save_pending_signals(all_alerts)
+    
+    print(f"偵測到 {len(all_alerts)} 個訊號 (早期:{len(early_alerts)}, OI:{len(alerts)}, 加速:{len(accel)})")
     
     filtered_alerts = filter_new_or_consistent(all_alerts)
     print(f"過濾後 {len(filtered_alerts)} 個需通知（新訊號或方向一致）")
