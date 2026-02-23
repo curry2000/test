@@ -145,10 +145,12 @@ POSITIONS = [
     {
         "name": "BTC U本位",
         "symbol": "BTCUSDT",
-        "entry": 86265.28,
+        "entry": 86264.5,
         "liquidation": 45842.83,
         "direction": "LONG",
         "leverage": 30,
+        "margin": 44903,
+        "quantity": 1.109,
         "platform": "Binance"
     }
 ]

@@ -2,6 +2,7 @@
 倉位監控與建議系統
 監控多個倉位的風險狀態，提供加倉/減倉建議
 """
+import os
 import numpy as np
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from config import (
 )
 from exchange_api import get_price, get_klines
 from notify import send_discord_message, DISCORD_WEBHOOK_URL
+from ob_engine import find_order_blocks_v2, filter_and_rank_obs, score_ob
 
 
 def calc_rsi(klines):
@@ -30,33 +32,20 @@ def calc_rsi(klines):
     return 100 - (100 / (1 + avg_gain / avg_loss))
 
 
-def find_obs(klines, current):
-    """找出 Order Block（多空關鍵區域）"""
-    bull, bear = [], []
-    for i in range(2, len(klines)-1):
-        prev, curr, nxt = klines[i-1], klines[i], klines[i+1]
-        # Bull OB: 連續三根陽線後反轉
-        if prev["close"] < prev["open"] and curr["close"] > curr["open"] and nxt["close"] > nxt["open"]:
-            if nxt["close"] > prev["open"] and current > prev["close"]:
-                bull.append({"top": prev["open"], "bottom": prev["close"]})
-        # Bear OB: 連續三根陰線後反轉
-        if prev["close"] > prev["open"] and curr["close"] < curr["open"] and nxt["close"] < nxt["open"]:
-            if nxt["close"] < prev["open"] and current < prev["close"]:
-                bear.append({"top": prev["close"], "bottom": prev["open"]})
-    return bull, bear
-
-
 def analyze_levels(symbol):
-    """分析多時間週期的支撐/壓力"""
+    """分析多時間週期的支撐/壓力 (V2: 含失效過濾)"""
     result = {}
-    for interval, label in [("1h","1H"), ("4h","4H"), ("1d","1D")]:
+    for interval, label, swing in [("1h","1H",3), ("4h","4H",3), ("1d","1D",3)]:
         klines = get_klines(symbol, interval if "h" in interval else "1D", 100)
         if not klines:
             continue
         
         current = klines[-1]["close"]
         rsi = calc_rsi(klines)
-        bull, bear = find_obs(klines, current)
+        
+        # V2 OB 偵測
+        raw_obs = find_order_blocks_v2(klines, swing)
+        bull_obs, bear_obs = filter_and_rank_obs(raw_obs, current, tf=label, max_distance_pct=5.0)
         
         recent = klines[-24:] if len(klines) >= 24 else klines
         support = min(k["low"] for k in recent)
@@ -66,8 +55,8 @@ def analyze_levels(symbol):
             "rsi": rsi,
             "support": support,
             "resistance": resistance,
-            "bull_ob": bull[-1] if bull else None,
-            "bear_ob": bear[-1] if bear else None
+            "bull_ob": bull_obs[0] if bull_obs else None,
+            "bear_ob": bear_obs[0] if bear_obs else None
         }
     return result
 
@@ -80,7 +69,19 @@ def get_action_advice(pos, price, levels):
     liq_dist = (price - liq) / price * 100
     
     leverage = pos.get("leverage", 20)
-    pnl_vs_margin = abs(pnl_pct) * leverage / 100  # 虧損倍數 vs 保證金
+    margin = pos.get("margin", 0)
+    quantity = pos.get("quantity", 0)
+    if quantity > 0 and margin > 0:
+        # 用真實持倉量和保證金計算
+        unrealized_pnl = quantity * (price - entry) if pos["direction"] == "LONG" else quantity * (entry - price)
+        pnl_vs_margin = abs(unrealized_pnl) / margin
+        real_leverage = (quantity * price) / margin
+    elif margin > 0:
+        position_value = margin * leverage
+        unrealized_pnl = position_value * pnl_pct / 100
+        pnl_vs_margin = abs(unrealized_pnl) / margin
+    else:
+        pnl_vs_margin = abs(pnl_pct) * leverage / 100  # fallback
     
     # 風險評級
     if liq_dist < POSITION_ALERT_LEVELS["danger"] or (pnl_vs_margin > 5 and leverage >= 20):
@@ -259,11 +260,47 @@ def main():
             result = get_action_advice(pos, price, levels)
             results.append(result)
     
-    # 發送通知
-    if results:
+    # 智能通知: 共用 monitor 的 notify_state，波動 >2% 即時，否則 30 分鐘
+    import json as _json
+    ADVISOR_NOTIFY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "advisor_notify_state.json")
+    ADVISOR_INTERVAL = 1800  # 30 分鐘
+    ADVISOR_VOL_THRESHOLD = 2.0
+    
+    try:
+        with open(ADVISOR_NOTIFY_FILE) as _f:
+            _state = _json.load(_f)
+    except:
+        _state = {}
+    
+    _now = datetime.now(TW_TIMEZONE).timestamp()
+    _last = _state.get("last_ts", 0)
+    _last_prices = _state.get("prices", {})
+    _elapsed = _now - _last
+    
+    _high_vol = False
+    for r in results:
+        prev = _last_prices.get(r["name"], 0)
+        if prev > 0:
+            change = abs(r["price"] - prev) / prev * 100
+            if change >= ADVISOR_VOL_THRESHOLD:
+                _high_vol = True
+    
+    _should_send = _high_vol or _elapsed >= ADVISOR_INTERVAL
+    
+    if _should_send:
+        _state["last_ts"] = _now
+        _state["prices"] = {r["name"]: r["price"] for r in results}
+        with open(ADVISOR_NOTIFY_FILE, "w") as _f:
+            _json.dump(_state, _f)
+    
+    if results and _should_send:
         message = format_message(results)
+        if _high_vol:
+            message = "🚨 波動警報\n\n" + message
         print("\n" + message)
         send_discord_message(message, webhook_url=DISCORD_WEBHOOK_URL)
+    elif results:
+        print(f"[靜默] 距上次 {_elapsed:.0f}s/{ADVISOR_INTERVAL}s, 無大波動")
 
 
 if __name__ == "__main__":

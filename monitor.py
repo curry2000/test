@@ -15,6 +15,13 @@ from config import (
 )
 from exchange_api import get_klines
 from notify import send_discord_message
+from ob_engine import (
+    find_order_blocks_v2,
+    filter_and_rank_obs,
+    resolve_direction_conflict,
+    calc_entry_sl_tp,
+    score_ob
+)
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT"]
 
@@ -304,39 +311,62 @@ def check_ob_status(symbol, price, bullish_obs, bearish_obs):
     save_json(OB_STATE_FILE, ob_state)
     return alerts
 
+_signal_cooldown = {}  # 冷卻追蹤: key -> timestamp
+
 def detect_signals(analysis):
+    global _signal_cooldown
     signals = []
     price = analysis["price"]
     rsi = analysis["rsi"]
     symbol = analysis["symbol"].replace("USDT", "")
+    now = datetime.now()
+    
+    # V2: 只在現價接近 OB 時觸發，入場用 OB mid，加冷卻
+    ob_signal = None
+    best_score = 0
     
     for ob in analysis.get("bullish_obs", []):
-        if ob["distance"] < 3:
-            signals.append({
-                "symbol": symbol,
-                "signal": "LONG",
-                "trigger": "OB",
-                "entry_price": price,
-                "ob_zone": f"${ob['bottom']:,.0f}-${ob['top']:,.0f}",
-                "tf": ob["tf"],
-                "confidence": ob["confidence"],
-                "rsi_1h": rsi["1h"]
-            })
-            break
+        proximity = abs(price - ob["top"]) / price * 100
+        if proximity < 1.5:
+            mid = (ob["top"] + ob["bottom"]) / 2
+            cooldown_key = f"{symbol}_bull_{ob['bottom']:.0f}"
+            last_trigger = _signal_cooldown.get(cooldown_key)
+            if last_trigger and (now - last_trigger).total_seconds() < 14400:  # 4hr cooldown
+                continue
+            score = ob.get("score", ob.get("confidence", 50))
+            if score > best_score:
+                best_score = score
+                ob_signal = {
+                    "symbol": symbol, "signal": "LONG", "trigger": "OB",
+                    "entry_price": round(mid, 2),
+                    "ob_zone": f"${ob['bottom']:,.0f}-${ob['top']:,.0f}",
+                    "tf": ob.get("tf", "1H"), "confidence": score, "rsi_1h": rsi["1h"],
+                    "_cooldown_key": cooldown_key
+                }
     
     for ob in analysis.get("bearish_obs", []):
-        if abs(ob["distance"]) < 3:
-            signals.append({
-                "symbol": symbol,
-                "signal": "SHORT",
-                "trigger": "OB",
-                "entry_price": price,
-                "ob_zone": f"${ob['bottom']:,.0f}-${ob['top']:,.0f}",
-                "tf": ob["tf"],
-                "confidence": ob["confidence"],
-                "rsi_1h": rsi["1h"]
-            })
-            break
+        proximity = abs(price - ob["bottom"]) / price * 100
+        if proximity < 1.5:
+            mid = (ob["top"] + ob["bottom"]) / 2
+            cooldown_key = f"{symbol}_bear_{ob['top']:.0f}"
+            last_trigger = _signal_cooldown.get(cooldown_key)
+            if last_trigger and (now - last_trigger).total_seconds() < 14400:
+                continue
+            score = ob.get("score", ob.get("confidence", 50))
+            if score > best_score:
+                best_score = score
+                ob_signal = {
+                    "symbol": symbol, "signal": "SHORT", "trigger": "OB",
+                    "entry_price": round(mid, 2),
+                    "ob_zone": f"${ob['bottom']:,.0f}-${ob['top']:,.0f}",
+                    "tf": ob.get("tf", "1H"), "confidence": score, "rsi_1h": rsi["1h"],
+                    "_cooldown_key": cooldown_key
+                }
+    
+    if ob_signal:
+        _signal_cooldown[ob_signal["_cooldown_key"]] = now
+        key = ob_signal.pop("_cooldown_key")
+        signals.append(ob_signal)
     
     if rsi["1h"] <= 25 and rsi["4h"] <= 35:
         signals.append({
@@ -431,16 +461,17 @@ def analyze_symbol(symbol):
     rsi_1h = calculate_rsi(klines_1h) if klines_1h else 50
     rsi_4h = calculate_rsi(klines_4h) if klines_4h else 50
     
+    # ─── V2 OB 偵測 (含失效過濾 + 品質評分) ───
     all_obs = []
     all_fvgs = []
     for tf_name, klines, swing in [("15M", klines_15m, 2), ("1H", klines_1h, 3), ("4H", klines_4h, 3)]:
         if not klines:
             continue
-        for ob in find_order_blocks(klines, swing)[-5:]:
+        raw_obs = find_order_blocks_v2(klines, swing)
+        bull, bear = filter_and_rank_obs(raw_obs, current_price, tf=tf_name, max_distance_pct=5.0)
+        for ob in bull + bear:
             ob["tf"] = tf_name
-            mid = (ob["top"] + ob["bottom"]) / 2
-            ob["distance"] = (current_price - mid) / current_price * 100
-            ob["confidence"] = get_confidence(ob)
+            ob["confidence"] = ob.get("score", score_ob(ob, tf_name))
             all_obs.append(ob)
         
         fvgs = find_standalone_fvgs(klines, current_price)
@@ -450,25 +481,13 @@ def analyze_symbol(symbol):
             fvg["distance"] = (current_price - mid) / current_price * 100
             all_fvgs.append(fvg)
     
-    bullish_obs = sorted([ob for ob in all_obs if ob["type"] == "bullish" and current_price > ob["top"]],
-                        key=lambda x: x["distance"])[:3]
-    bearish_obs = sorted([ob for ob in all_obs if ob["type"] == "bearish" and current_price < ob["bottom"]],
-                        key=lambda x: abs(x["distance"]))[:3]
+    bullish_obs = sorted([ob for ob in all_obs if ob["type"] == "bullish"],
+                        key=lambda x: x.get("score", 0), reverse=True)[:3]
+    bearish_obs = sorted([ob for ob in all_obs if ob["type"] == "bearish"],
+                        key=lambda x: x.get("score", 0), reverse=True)[:3]
     
-    def dedupe_obs(obs_list, min_gap_pct=1.5):
-        if not obs_list:
-            return []
-        result = [obs_list[0]]
-        for ob in obs_list[1:]:
-            last_mid = (result[-1]["top"] + result[-1]["bottom"]) / 2
-            this_mid = (ob["top"] + ob["bottom"]) / 2
-            gap = abs(this_mid - last_mid) / current_price * 100
-            if gap >= min_gap_pct:
-                result.append(ob)
-        return result
-    
-    bullish_obs = dedupe_obs(bullish_obs)
-    bearish_obs = dedupe_obs(bearish_obs)
+    # 方向衝突過濾
+    bullish_obs, bearish_obs = resolve_direction_conflict(bullish_obs, bearish_obs)
     
     bullish_fvgs = sorted([f for f in all_fvgs if f["type"] == "bullish"], key=lambda x: x["distance"])[:2]
     bearish_fvgs = sorted([f for f in all_fvgs if f["type"] == "bearish"], key=lambda x: abs(x["distance"]))[:2]
@@ -508,41 +527,39 @@ def format_message(analyses):
         res_dist = (a["resistance"] - a["price"]) / a["price"] * 100
         lines.append(f"📍 支撐 ${a['support']:,.0f} ({sup_dist:.1f}%) | 阻力 ${a['resistance']:,.0f} ({res_dist:.1f}%)")
         
+        # 只顯示距離現價 3% 以內的 OB (可操作範圍)
+        price = a["price"]
         if a["bullish_obs"]:
             for ob in a["bullish_obs"][:2]:
-                mid = (ob['top'] + ob['bottom']) / 2
-                ob_range = ob['top'] - ob['bottom']
-                entry = mid
-                sl = ob['bottom'] - ob_range * 0.3
-                risk = entry - sl
-                tp1 = entry + risk * 1.5
-                tp2 = entry + risk * 2.5
-                tp3 = entry + risk * 4.0
-                rr = (tp2 - entry) / risk if risk > 0 else 0
+                mid = (ob["top"] + ob["bottom"]) / 2
+                dist = abs(price - mid) / price * 100
+                if dist > 3.0:
+                    continue
+                levels = calc_entry_sl_tp(ob, "LONG")
                 vol_tag = f" 📊{ob['vol_ratio']:.1f}x" if ob.get('vol_ratio', 0) > 1.2 else ""
                 fvg_tag = " ⚡FVG" if ob.get('fvg') else ""
-                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📈做多 {ob['confidence']}%{vol_tag}{fvg_tag}")
-                lines.append(f"  📍 入場 ${entry:,.0f} | SL ${sl:,.0f}")
-                lines.append(f"  🎯 TP1 ${tp1:,.0f}(40%) → TP2 ${tp2:,.0f}(30%) → TP3 ${tp3:,.0f}(30%)")
-                lines.append(f"  📐 盈虧比 {rr:.1f}R")
+                test_tag = f" 🔄{ob['tests']}次" if ob.get('tests', 0) > 0 else ""
+                score = ob.get('score', ob.get('confidence', 50))
+                lines.append(f"🟢 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{levels['entry']:,.0f}) | 📈做多 {score}分{vol_tag}{fvg_tag}{test_tag}")
+                lines.append(f"  📍 入場 ${levels['entry']:,.0f} | SL ${levels['sl']:,.0f}")
+                lines.append(f"  🎯 TP1 ${levels['tp1']:,.0f}(40%) → TP2 ${levels['tp2']:,.0f}(30%) → TP3 ${levels['tp3']:,.0f}(30%)")
+                lines.append(f"  📐 盈虧比 {levels['rr']:.1f}R")
         
         if a["bearish_obs"]:
             for ob in a["bearish_obs"][:2]:
-                mid = (ob['top'] + ob['bottom']) / 2
-                ob_range = ob['top'] - ob['bottom']
-                entry = mid
-                sl = ob['top'] + ob_range * 0.3
-                risk = sl - entry
-                tp1 = entry - risk * 1.5
-                tp2 = entry - risk * 2.5
-                tp3 = entry - risk * 4.0
-                rr = (entry - tp2) / risk if risk > 0 else 0
+                mid = (ob["top"] + ob["bottom"]) / 2
+                dist = abs(price - mid) / price * 100
+                if dist > 3.0:
+                    continue
+                levels = calc_entry_sl_tp(ob, "SHORT")
                 vol_tag = f" 📊{ob['vol_ratio']:.1f}x" if ob.get('vol_ratio', 0) > 1.2 else ""
                 fvg_tag = " ⚡FVG" if ob.get('fvg') else ""
-                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{mid:,.0f}) | 📉做空 {ob['confidence']}%{vol_tag}{fvg_tag}")
-                lines.append(f"  📍 入場 ${entry:,.0f} | SL ${sl:,.0f}")
-                lines.append(f"  🎯 TP1 ${tp1:,.0f}(40%) → TP2 ${tp2:,.0f}(30%) → TP3 ${tp3:,.0f}(30%)")
-                lines.append(f"  📐 盈虧比 {rr:.1f}R")
+                test_tag = f" 🔄{ob['tests']}次" if ob.get('tests', 0) > 0 else ""
+                score = ob.get('score', ob.get('confidence', 50))
+                lines.append(f"🔴 [{ob['tf']}] ${ob['bottom']:,.0f}-${ob['top']:,.0f} (中:{levels['entry']:,.0f}) | 📉做空 {score}分{vol_tag}{fvg_tag}{test_tag}")
+                lines.append(f"  📍 入場 ${levels['entry']:,.0f} | SL ${levels['sl']:,.0f}")
+                lines.append(f"  🎯 TP1 ${levels['tp1']:,.0f}(40%) → TP2 ${levels['tp2']:,.0f}(30%) → TP3 ${levels['tp3']:,.0f}(30%)")
+                lines.append(f"  📐 盈虧比 {levels['rr']:.1f}R")
         
         if a.get("bullish_fvgs") or a.get("bearish_fvgs"):
             for fvg in a.get("bullish_fvgs", [])[:1]:
@@ -565,6 +582,65 @@ def send_discord(message):
         print("Discord: 200 OK")
     else:
         print("Discord: Send failed")
+
+NOTIFY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notify_state.json")
+VOLATILITY_THRESHOLD = 2.0  # 波動 >2% 即時通知
+NORMAL_INTERVAL = 1800      # 正常間隔 30 分鐘 (秒)
+
+def should_notify(analyses):
+    """
+    智能通知控制:
+    - 波動 >2% → 即時通知 (標記 🚨)
+    - 有 OB 信號觸發 → 即時通知
+    - 否則 → 30 分鐘通知一次
+    Returns: (should_send, reason)
+    """
+    state = load_json(NOTIFY_STATE_FILE)
+    if not isinstance(state, dict):
+        state = {}
+    
+    now = datetime.now().timestamp()
+    last_notify = state.get("last_notify_ts", 0)
+    last_prices = state.get("last_prices", {})
+    elapsed = now - last_notify
+    
+    # 檢查波動
+    high_vol = False
+    vol_details = []
+    for a in analyses:
+        base = a["symbol"].replace("USDT", "")
+        prev_price = last_prices.get(base, 0)
+        if prev_price > 0:
+            change_pct = abs(a["price"] - prev_price) / prev_price * 100
+            if change_pct >= VOLATILITY_THRESHOLD:
+                high_vol = True
+                direction = "📈" if a["price"] > prev_price else "📉"
+                vol_details.append(f"{base} {direction}{change_pct:.1f}%")
+    
+    # 更新價格記錄 (每次都更新)
+    for a in analyses:
+        base = a["symbol"].replace("USDT", "")
+        state["last_prices_current"] = state.get("last_prices_current", {})
+        state["last_prices_current"][base] = a["price"]
+    
+    if high_vol:
+        # 波動大: 即時通知，重置價格基準
+        state["last_notify_ts"] = now
+        state["last_prices"] = {a["symbol"].replace("USDT", ""): a["price"] for a in analyses}
+        save_json(NOTIFY_STATE_FILE, state)
+        return True, f"🚨 波動警報: {', '.join(vol_details)}"
+    
+    if elapsed >= NORMAL_INTERVAL:
+        # 定時通知
+        state["last_notify_ts"] = now
+        state["last_prices"] = {a["symbol"].replace("USDT", ""): a["price"] for a in analyses}
+        save_json(NOTIFY_STATE_FILE, state)
+        return True, "⏰ 定時更新"
+    
+    # 不需要通知，但保存當前價格供下次波動比較
+    save_json(NOTIFY_STATE_FILE, state)
+    return False, f"跳過 (距上次 {elapsed:.0f}s/{NORMAL_INTERVAL}s, 無大波動)"
+
 
 def main():
     print("=== Crypto Monitor Start ===")
@@ -593,12 +669,29 @@ def main():
     
     log_signals(all_signals)
     
-    if analyses:
+    # 智能通知控制
+    send_notify, reason = should_notify(analyses)
+    
+    # OB 狀態變化 (BREAK/DEFEND) 強制即時通知
+    critical_ob = [a for a in ob_alerts if a.get("type") in ("BREAK", "DEFEND", "RECLAIM")]
+    if critical_ob and not send_notify:
+        send_notify = True
+        reason = "🎯 OB 狀態變化"
+    
+    print(f"通知: {reason}")
+    
+    if send_notify and analyses:
         message = format_message(analyses)
+        # 波動警報加前綴
+        if reason.startswith("🚨"):
+            message = reason + "\n\n" + message
         print("\n" + message)
         send_discord(message)
+    elif analyses:
+        # 不發通知，只印出
+        print("\n[靜默] " + format_message(analyses)[:200] + "...")
     
-    if ob_alerts:
+    if ob_alerts and send_notify:
         tw_tz = TW_TIMEZONE
         now = datetime.now(tw_tz).strftime("%m/%d %H:%M")
         ob_tag = os.environ.get("SOURCE_TAG", "BN本地")
