@@ -127,29 +127,35 @@ POSITIONS = [
     {
         "name": "BTC 幣本位",
         "symbol": "BTCUSDT",
-        "entry": 73985.4,
-        "liquidation": 40336,
+        "entry": 73986.4,
+        "liquidation": 43800,
         "direction": "LONG",
         "leverage": 20,
+        "quantity": 1.1655,
+        "margin_coin": 0.0583,
+        "margin_unit": "BTC",
         "platform": "OKX"
     },
     {
         "name": "ETH 幣本位",
         "symbol": "ETHUSDT",
-        "entry": 2227.92,
-        "liquidation": 1234,
+        "entry": 2215.00,
+        "liquidation": 1341.54,
         "direction": "LONG",
         "leverage": 20,
+        "quantity": 20.2229,
+        "margin_coin": 1.0113,
+        "margin_unit": "ETH",
         "platform": "OKX"
     },
     {
         "name": "BTC U本位",
         "symbol": "BTCUSDT",
-        "entry": 86264.5,
-        "liquidation": 45842.83,
+        "entry": 86265.28,
+        "liquidation": 43766.85,
         "direction": "LONG",
         "leverage": 30,
-        "margin": 44903,
+        "margin": 2340.14,
         "quantity": 1.109,
         "platform": "Binance"
     }

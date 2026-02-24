@@ -71,11 +71,19 @@ def get_action_advice(pos, price, levels):
     leverage = pos.get("leverage", 20)
     margin = pos.get("margin", 0)
     quantity = pos.get("quantity", 0)
-    if quantity > 0 and margin > 0:
-        # 用真實持倉量和保證金計算
+    margin_coin = pos.get("margin_coin", 0)
+    margin_unit = pos.get("margin_unit", "USDT")
+    
+    if margin_coin > 0:
+        # 幣本位：保證金是幣，PnL 也是幣
+        unrealized_coin = quantity * (price - entry) / price if pos["direction"] == "LONG" else quantity * (entry - price) / price
+        pnl_vs_margin = abs(unrealized_coin) / margin_coin
+        margin_usd = margin_coin * price
+        unrealized_pnl = unrealized_coin * price
+    elif quantity > 0 and margin > 0:
+        # U本位：用真實持倉量和保證金計算
         unrealized_pnl = quantity * (price - entry) if pos["direction"] == "LONG" else quantity * (entry - price)
         pnl_vs_margin = abs(unrealized_pnl) / margin
-        real_leverage = (quantity * price) / margin
     elif margin > 0:
         position_value = margin * leverage
         unrealized_pnl = position_value * pnl_pct / 100
