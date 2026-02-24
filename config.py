@@ -132,7 +132,7 @@ POSITIONS = [
         "direction": "LONG",
         "leverage": 20,
         "quantity": 1.1655,
-        "margin_coin": 0.0583,
+        "margin_coin": 0.5240888,
         "margin_unit": "BTC",
         "platform": "OKX"
     },
@@ -144,7 +144,7 @@ POSITIONS = [
         "direction": "LONG",
         "leverage": 20,
         "quantity": 20.2229,
-        "margin_coin": 1.0113,
+        "margin_coin": 7.42262,
         "margin_unit": "ETH",
         "platform": "OKX"
     },
@@ -155,7 +155,7 @@ POSITIONS = [
         "liquidation": 43766.85,
         "direction": "LONG",
         "leverage": 30,
-        "margin": 2340.14,
+        "margin": 47324.92,
         "quantity": 1.109,
         "platform": "Binance"
     }
