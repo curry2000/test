@@ -96,6 +96,32 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
         if p["symbol"] == symbol:
             return None, "已有持倉"
     
+    # SL 冷卻：同幣被 SL 出場後 1 小時內不再開倉
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    for t in state.get("closed", [])[-50:]:  # 只查最近 50 筆
+        if t.get("symbol") == symbol and "SL" in t.get("reason", ""):
+            closed_at = t.get("closed_at", "")
+            if closed_at:
+                try:
+                    sl_time = datetime.fromisoformat(closed_at)
+                    hours_since = (now - sl_time).total_seconds() / 3600
+                    if hours_since < 1:
+                        return None, f"SL冷卻中({hours_since:.1f}h/{1}h)"
+                except:
+                    pass
+    
+    # 同幣連虧 2 次 → 當日黑名單
+    today = now.strftime("%Y-%m-%d")
+    daily_losses = 0
+    for t in state.get("closed", [])[-50:]:
+        if (t.get("symbol") == symbol and 
+            t.get("closed_at", "")[:10] == today and 
+            t.get("pnl_usd", 0) < 0):
+            daily_losses += 1
+    if daily_losses >= 2:
+        return None, f"同幣當日已虧{daily_losses}次，黑名單"
+    
     should_open, reason = should_open_position(signal, phase, rsi, strength_grade, vol_ratio, symbol)
     if not should_open:
         return None, f"不開倉: {reason}"
