@@ -219,10 +219,32 @@ def scan_coin(symbol, candles_1h_map=None):
     return None
 
 
+def get_btc_trend():
+    """判斷 BTC 大盤趨勢 (4H RSI)"""
+    try:
+        klines = get_klines("BTC", "4h", 20)
+        if not klines or len(klines) < 15:
+            return "neutral", 50
+        closes = [k["close"] for k in klines]
+        rsis = calc_rsi_series(closes)
+        rsi = rsis[-1] if rsis else 50
+        if rsi > 55:
+            return "bullish", rsi
+        elif rsi < 45:
+            return "bearish", rsi
+        return "neutral", rsi
+    except:
+        return "neutral", 50
+
+
 def main():
     """主程序"""
     now = datetime.now(TW_TIMEZONE)
     state = load_state()
+
+    # 判斷大盤趨勢
+    btc_trend, btc_rsi = get_btc_trend()
+    print(f"BTC trend: {btc_trend} (4H RSI: {btc_rsi:.0f})")
 
     # 取得交易量前 80 的幣種
     coins = get_top_coins(80)
@@ -254,7 +276,9 @@ def main():
     print(f"  Pre-filter: {len(candidates)} coins with 24H change > 10%")
 
     # 掃描每個幣種
-    alerts = []
+    dump_alerts = []
+    momentum_alerts = []
+    
     for sym in candidates:
         try:
             result = scan_coin(sym)
@@ -272,20 +296,30 @@ def main():
                     except:
                         pass
 
-                alerts.append(result)
+                # 根據大盤趨勢分類
+                chg_24h = price_changes.get(sym, 0)
+                if btc_trend == "bullish" and chg_24h > 10:
+                    # 大盤漲 + 幣漲超過 10% = 強勢回調候選
+                    result["momentum"] = True
+                    result["change_24h"] = chg_24h
+                    momentum_alerts.append(result)
+                else:
+                    result["momentum"] = False
+                    dump_alerts.append(result)
+                
                 state[key] = now.isoformat()
-                print(f"  {result['emoji']} {result['symbol']} ${result['price']:.4f} 分{result['score']} {result['grade']} | {', '.join(result['signals'])}")
+                tag = "📈" if result["momentum"] else result["emoji"]
+                print(f"  {tag} {result['symbol']} ${result['price']:.4f} 分{result['score']} {result['grade']} | {', '.join(result['signals'])}")
             
             time.sleep(0.1)  # Rate limit
         except Exception as e:
             print(f"  {sym} error: {e}")
 
-    # 發送通知
-    if alerts:
-        alerts.sort(key=lambda x: x["score"], reverse=True)
-
+    # 發送下跌預警（大盤弱勢或中性時）
+    if dump_alerts:
+        dump_alerts.sort(key=lambda x: x["score"], reverse=True)
         lines = [f"⚠️ **下跌預警** | {now.strftime('%m/%d %H:%M')}\n"]
-        for a in alerts[:8]:  # 最多顯示 8 個
+        for a in dump_alerts[:8]:
             sig_text = " + ".join(a["signals"][:3])
             lines.append(
                 f"{a['emoji']} **{a['symbol']}** ${a['price']:,.4f} | "
@@ -293,12 +327,29 @@ def main():
                 f"  → {sig_text}"
             )
         lines.append("\n💡 預警≠做空信號，建議：有多單先收利潤/移止損")
-
         msg = "\n".join(lines)
         print(f"\n{msg}")
         send_discord_message(msg)
-    else:
-        print("No dump warnings")
+
+    # 發送強勢回調候選（大盤上漲時）
+    if momentum_alerts:
+        momentum_alerts.sort(key=lambda x: x["score"], reverse=True)
+        lines = [f"📈 **強勢回調候選** | {now.strftime('%m/%d %H:%M')} | BTC 4H RSI {btc_rsi:.0f}\n"]
+        for a in momentum_alerts[:8]:
+            sig_text = " + ".join(a["signals"][:3])
+            lines.append(
+                f"🔥 **{a['symbol']}** ${a['price']:,.4f} | "
+                f"24H +{a.get('change_24h', 0):.0f}% | RSI {a['rsi']:.0f}\n"
+                f"  → {sig_text}\n"
+                f"  💡 強勢幣短暫修正，觀察是否回調做多"
+            )
+        lines.append(f"\n⚡ 大盤偏多(RSI {btc_rsi:.0f})，這些幣的「弱勢信號」可能是回調買點")
+        msg = "\n".join(lines)
+        print(f"\n{msg}")
+        send_discord_message(msg)
+
+    if not dump_alerts and not momentum_alerts:
+        print("No alerts")
 
     save_state(state)
 
