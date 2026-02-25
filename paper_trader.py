@@ -70,6 +70,9 @@ def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0, sym
             return False, f"資金費率 {fr_pct:+.4f}% 偏正，不做多"
         if rsi >= 80 and "⚠️" in phase:
             return False, f"RSI {rsi:.0f} 極端超買+高位，跳過"
+        # C級 + 爆量 = 追高垃圾，不開倉
+        if "C" in strength_grade and vol_ratio >= 1.5:
+            return False, f"C級+爆量(vol={vol_ratio:.1f}x)，跳過追高"
         if rsi >= 60:
             return True, f"RSI {rsi:.0f} 強勢追多 FR:{fr_pct:+.4f}%"
         if "🌱" in phase:

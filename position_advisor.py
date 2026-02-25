@@ -33,9 +33,9 @@ def calc_rsi(klines):
 
 
 def analyze_levels(symbol):
-    """分析多時間週期的支撐/壓力 (V2: 含失效過濾)"""
+    """分析多時間週期的支撐/壓力 (V3: mitigation + swing靈敏度)"""
     result = {}
-    for interval, label, swing in [("1h","1H",3), ("4h","4H",3), ("1d","1D",3)]:
+    for interval, label, swing in [("1h","1H",2), ("4h","4H",3), ("1d","1D",3)]:
         klines = get_klines(symbol, interval if "h" in interval else "1D", 100)
         if not klines:
             continue

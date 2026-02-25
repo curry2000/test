@@ -1,12 +1,13 @@
 """
-OB Engine V3 — 共用 Order Block 偵測與評分
+OB Engine V2 — 共用 Order Block 偵測與評分
 供 monitor.py 和 position_advisor.py 使用
 
-V3 改動:
-1. Mitigation 比例取代二元失效 — 收盤穿過改記錄 mitigation%，不直接刪除
-2. 測試次數不再硬刪 — 改為降分
-3. 1H 預設 swing=2 增加靈敏度
-4. max_distance_pct 預設放寬到 10%
+改動:
+1. OB 失效機制 — 收盤穿破即失效
+2. 被測試次數追蹤 (>3 次降級)
+3. 品質評分 (時間週期權重 + 成交量 + age 衰減)
+4. 方向衝突過濾 — 同幣種只取最高分方向
+5. 冷卻去重 — 同 OB 不重複觸發
 """
 import numpy as np
 from datetime import datetime
@@ -17,20 +18,14 @@ TF_WEIGHT = {"4H": 70, "1H": 55, "15M": 40, "1D": 80}
 AGE_LIMIT = {"4H": 42, "1H": 72, "15M": 96, "1D": 30}
 # age 衰減門檻
 AGE_DECAY = {"4H": 12, "1H": 48, "15M": 72, "1D": 14}
-# 每個時框的預設 swing length
-SWING_LENGTH = {"4H": 3, "1H": 2, "15M": 2, "1D": 3}
 
 
 def find_order_blocks_v2(klines, swing_length=3):
     """
-    偵測 Order Block，含 mitigation 追蹤
+    偵測 Order Block，含失效過濾和測試次數追蹤
     
-    V3: 不再二元失效，改記錄 mitigation 比例
-    - mitigation_pct: 價格穿入 OB 的最深比例 (0-100%)
-    - 100% = 完全穿透（收盤穿過對面邊界）
-    - tests: 碰觸次數（不再硬刪，改為降分）
-    
-    Returns: list of OB dicts
+    Returns: list of OB dicts with keys:
+        type, top, bottom, vol_ratio, index, tests, age, fvg
     """
     if len(klines) < swing_length * 2 + 5:
         return []
@@ -40,10 +35,10 @@ def find_order_blocks_v2(klines, swing_length=3):
     if avg_vol == 0:
         avg_vol = 1
     
-    highs = [k["high"] for k in klines]
-    lows = [k["low"] for k in klines]
-    
     for i in range(swing_length, len(klines) - swing_length - 1):
+        highs = [k["high"] for k in klines]
+        lows = [k["low"] for k in klines]
+        
         is_swing_high = all(highs[i] > highs[i-j] for j in range(1, swing_length+1)) and \
                         all(highs[i] > highs[i+j] for j in range(1, swing_length+1))
         is_swing_low = all(lows[i] < lows[i-j] for j in range(1, swing_length+1)) and \
@@ -57,29 +52,18 @@ def find_order_blocks_v2(klines, swing_length=3):
                 if klines[i-j]["close"] > klines[i-j]["open"]:
                     ob_top = klines[i-j]["high"]
                     ob_bottom = klines[i-j]["low"]
-                    ob_range = ob_top - ob_bottom
                     
-                    # Mitigation 追蹤
-                    max_penetration = 0  # 最深穿入比例
+                    # 失效檢查: 後續收盤價突破 OB top
+                    invalidated = False
                     test_count = 0
-                    fully_invalidated = False
-                    
                     for k in range(i+1, len(klines)):
-                        # 測試：high 碰到 ob_bottom
+                        if klines[k]["close"] > ob_top:
+                            invalidated = True
+                            break
                         if klines[k]["high"] >= ob_bottom:
                             test_count += 1
-                        
-                        # 穿入深度：用 close 來算
-                        if klines[k]["close"] > ob_bottom and ob_range > 0:
-                            penetration = min((klines[k]["close"] - ob_bottom) / ob_range * 100, 100)
-                            max_penetration = max(max_penetration, penetration)
-                        
-                        # 完全失效：收盤穿過 ob_top 且遠離
-                        if klines[k]["close"] > ob_top + ob_range * 0.5:
-                            fully_invalidated = True
-                            break
                     
-                    if not fully_invalidated:
+                    if not invalidated and test_count <= 3:
                         has_fvg = _check_fvg(klines, i, "bearish")
                         obs.append({
                             "type": "bearish",
@@ -88,7 +72,6 @@ def find_order_blocks_v2(klines, swing_length=3):
                             "vol_ratio": vol_ratio,
                             "index": i,
                             "tests": test_count,
-                            "mitigation_pct": round(max_penetration, 1),
                             "age": len(klines) - 1 - i,
                             "fvg": has_fvg
                         })
@@ -100,27 +83,18 @@ def find_order_blocks_v2(klines, swing_length=3):
                 if klines[i-j]["close"] < klines[i-j]["open"]:
                     ob_top = klines[i-j]["high"]
                     ob_bottom = klines[i-j]["low"]
-                    ob_range = ob_top - ob_bottom
                     
-                    # Mitigation 追蹤
-                    max_penetration = 0
+                    # 失效檢查: 後續收盤價跌破 OB bottom
+                    invalidated = False
                     test_count = 0
-                    fully_invalidated = False
-                    
                     for k in range(i+1, len(klines)):
+                        if klines[k]["close"] < ob_bottom:
+                            invalidated = True
+                            break
                         if klines[k]["low"] <= ob_top:
                             test_count += 1
-                        
-                        if klines[k]["close"] < ob_top and ob_range > 0:
-                            penetration = min((ob_top - klines[k]["close"]) / ob_range * 100, 100)
-                            max_penetration = max(max_penetration, penetration)
-                        
-                        # 完全失效：收盤穿過 ob_bottom 且遠離
-                        if klines[k]["close"] < ob_bottom - ob_range * 0.5:
-                            fully_invalidated = True
-                            break
                     
-                    if not fully_invalidated:
+                    if not invalidated and test_count <= 3:
                         has_fvg = _check_fvg(klines, i, "bullish")
                         obs.append({
                             "type": "bullish",
@@ -129,7 +103,6 @@ def find_order_blocks_v2(klines, swing_length=3):
                             "vol_ratio": vol_ratio,
                             "index": i,
                             "tests": test_count,
-                            "mitigation_pct": round(max_penetration, 1),
                             "age": len(klines) - 1 - i,
                             "fvg": has_fvg
                         })
@@ -162,12 +135,11 @@ def _check_fvg(klines, index, direction):
 
 def score_ob(ob, tf="1H"):
     """
-    OB 品質評分 V3
+    OB 品質評分
     base = 時間週期權重
     + volume bonus
     + fvg bonus
-    - test penalty (降分但不刪除)
-    - mitigation penalty (穿入越深分越低)
+    - test penalty
     - age decay
     """
     base = TF_WEIGHT.get(tf, 50)
@@ -182,23 +154,8 @@ def score_ob(ob, tf="1H"):
     if ob.get("fvg"):
         base += 10
     
-    # Test penalty — 降分但不刪除
-    tests = ob.get("tests", 0)
-    if tests > 5:
-        base -= 20
-    elif tests > 3:
-        base -= 12
-    elif tests > 1:
-        base -= tests * 3
-    
-    # Mitigation penalty — 穿入越深越弱
-    mit_pct = ob.get("mitigation_pct", 0)
-    if mit_pct >= 80:
-        base -= 25  # 幾乎穿透，很弱
-    elif mit_pct >= 50:
-        base -= 15
-    elif mit_pct >= 20:
-        base -= 8
+    # Test penalty
+    base -= ob.get("tests", 0) * 5
     
     # Age decay
     age = ob.get("age", 0)
@@ -209,10 +166,11 @@ def score_ob(ob, tf="1H"):
     return max(0, base)
 
 
-def filter_and_rank_obs(obs, current_price, tf="1H", max_distance_pct=10.0):
+def filter_and_rank_obs(obs, current_price, tf="1H", max_distance_pct=5.0):
     """
-    過濾 + 排序 OB
-    V3: max_distance 預設放寬到 10%
+    過濾 + 排序 OB，加入距離和評分
+    
+    Returns: (bullish_obs, bearish_obs) 各自按品質排序
     """
     for ob in obs:
         mid = (ob["top"] + ob["bottom"]) / 2
@@ -223,26 +181,27 @@ def filter_and_rank_obs(obs, current_price, tf="1H", max_distance_pct=10.0):
         else:
             ob["distance"] = (mid - current_price) / current_price * 100
     
+    # 過濾: 距離限制 + age 限制
     age_limit = AGE_LIMIT.get(tf, 72)
     
     bullish = [ob for ob in obs 
                if ob["type"] == "bullish" 
                and 0 < ob["distance"] < max_distance_pct
-               and ob["age"] < age_limit
-               and ob["score"] > 0]
+               and ob["age"] < age_limit]
     bearish = [ob for ob in obs 
                if ob["type"] == "bearish" 
                and 0 < ob["distance"] < max_distance_pct
-               and ob["age"] < age_limit
-               and ob["score"] > 0]
+               and ob["age"] < age_limit]
     
+    # 按 score 排序 (高分優先)
     bullish.sort(key=lambda x: x["score"], reverse=True)
     bearish.sort(key=lambda x: x["score"], reverse=True)
     
+    # 去重: 相近價位只保留最高分
     bullish = _dedupe_obs(bullish, current_price)
     bearish = _dedupe_obs(bearish, current_price)
     
-    return bullish[:5], bearish[:5]
+    return bullish[:3], bearish[:3]
 
 
 def _dedupe_obs(obs_list, current_price, min_gap_pct=1.5):
@@ -263,7 +222,10 @@ def _dedupe_obs(obs_list, current_price, min_gap_pct=1.5):
 
 
 def resolve_direction_conflict(bullish_obs, bearish_obs):
-    """方向衝突過濾"""
+    """
+    方向衝突過濾: 同幣種多空衝突時，取最高分的方向
+    Returns: (bullish_obs, bearish_obs) — 其中一個可能被清空
+    """
     if not bullish_obs or not bearish_obs:
         return bullish_obs, bearish_obs
     
@@ -275,11 +237,15 @@ def resolve_direction_conflict(bullish_obs, bearish_obs):
     elif best_bear > best_bull:
         return [], bearish_obs
     else:
+        # 平手: 都保留，讓使用者判斷
         return bullish_obs, bearish_obs
 
 
 def calc_entry_sl_tp(ob, direction):
-    """基於 OB 區間計算入場/止損/止盈"""
+    """
+    基於 OB 區間計算入場/止損/止盈
+    入場 = OB mid
+    """
     mid = (ob["top"] + ob["bottom"]) / 2
     ob_range = ob["top"] - ob["bottom"]
     
@@ -290,7 +256,7 @@ def calc_entry_sl_tp(ob, direction):
         tp1 = entry + risk * 1.5
         tp2 = entry + risk * 2.5
         tp3 = entry + risk * 4.0
-    else:
+    else:  # SHORT
         entry = mid
         sl = ob["top"] + ob_range * 0.3
         risk = sl - entry
