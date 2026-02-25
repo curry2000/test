@@ -220,9 +220,9 @@ def scan_coin(symbol, candles_1h_map=None):
 
 
 def get_btc_trend():
-    """判斷 BTC 大盤趨勢 (4H RSI)"""
+    """判斷 BTC 大盤趨勢 (1H RSI，更早捕捉轉勢)"""
     try:
-        klines = get_klines("BTC", "4h", 20)
+        klines = get_klines("BTC", "1h", 20)
         if not klines or len(klines) < 15:
             return "neutral", 50
         closes = [k["close"] for k in klines]
@@ -334,7 +334,7 @@ def main():
     # 發送強勢回調候選（大盤上漲時）
     if momentum_alerts:
         momentum_alerts.sort(key=lambda x: x["score"], reverse=True)
-        lines = [f"📈 **強勢回調候選** | {now.strftime('%m/%d %H:%M')} | BTC 4H RSI {btc_rsi:.0f}\n"]
+        lines = [f"📈 **強勢回調候選** | {now.strftime('%m/%d %H:%M')} | BTC 1H RSI {btc_rsi:.0f}\n"]
         for a in momentum_alerts[:8]:
             sig_text = " + ".join(a["signals"][:3])
             lines.append(
