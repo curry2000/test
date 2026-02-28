@@ -65,8 +65,12 @@ def get_action_advice(pos, price, levels):
     """根據倉位狀態和技術分析給出建議"""
     entry = pos["entry"]
     liq = pos["liquidation"]
-    pnl_pct = (price - entry) / entry * 100
-    liq_dist = (price - liq) / price * 100
+    if pos["direction"] == "SHORT":
+        pnl_pct = (entry - price) / entry * 100
+        liq_dist = (liq - price) / price * 100 if liq > price else (price - liq) / price * 100
+    else:
+        pnl_pct = (price - entry) / entry * 100
+        liq_dist = (price - liq) / price * 100
     
     leverage = pos.get("leverage", 20)
     margin = pos.get("margin", 0)
