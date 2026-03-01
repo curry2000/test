@@ -610,13 +610,14 @@ def send_discord(msg, pin=False):
                 cfg = _json.load(f)
             bot_token = cfg.get("channels", {}).get("discord", {}).get("token", "")
             if bot_token:
+                # 釘選到模擬交易討論串（而非主頻道）
                 msgs = requests.get(
-                    f"https://discord.com/api/v10/channels/1471200792945098955/messages?limit=1",
+                    f"https://discord.com/api/v10/channels/{DISCORD_THREAD_PAPER}/messages?limit=1",
                     headers={"Authorization": f"Bot {bot_token}"}, timeout=10
                 ).json()
                 if msgs and len(msgs) > 0:
                     requests.put(
-                        f"https://discord.com/api/v10/channels/1471200792945098955/pins/{msgs[0]['id']}",
+                        f"https://discord.com/api/v10/channels/{DISCORD_THREAD_PAPER}/pins/{msgs[0]['id']}",
                         headers={"Authorization": f"Bot {bot_token}"}, timeout=10
                     )
         except:

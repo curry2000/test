@@ -13,11 +13,11 @@ from config import (
     TW_TIMEZONE,
     DISCORD_THREAD_TECH
 )
+
+CHANNEL_ID = DISCORD_THREAD_TECH
 from exchange_api import get_klines
 from notify import send_discord_message
 
-
-CHANNEL_ID = "1471200792945098955"
 
 
 def get_bot_token():
