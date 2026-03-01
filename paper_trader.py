@@ -7,7 +7,7 @@ from config import (
     PAPER_STATE_FILE, PAPER_CONFIG, DYNAMIC_TP_CONFIG, VOL_RATIO_MULTIPLIERS,
     FUNDING_RATE_THRESHOLD_LONG, FUNDING_RATE_THRESHOLD_SHORT,
     RSI_EXTREME_HIGH, RSI_HIGH, RSI_EXTREME_LOW, RSI_LOW,
-    DISCORD_THREAD_PAPER
+    DISCORD_THREAD_PAPER, DISCORD_PING_USER_ID, DISCORD_MAIN_CHANNEL_ID
 )
 from exchange_api import get_price, get_funding_rate, get_klines
 from notify import send_discord_message, send_trade_update
@@ -548,7 +548,9 @@ def format_trade_msg(action, data):
         grade = pos.get('strength_grade', '')
         vol = pos.get('vol_ratio', 0)
         size_note = pos.get('size_note', '')
-        return f"""📝 **模擬開倉 [BN本地]** | {now}
+        ping = f"<@{DISCORD_PING_USER_ID}>" if DISCORD_PING_USER_ID else ""
+        return f"""{ping}
+📝 **模擬開倉 [BN本地]** | {now}
 
 {emoji} **{pos['symbol']}** {pos['direction']} {grade}{size_note}
 • 進場: ${pos['entry_price']:.4g} | 倉位: ${pos['size']:.0f}
@@ -562,7 +564,9 @@ def format_trade_msg(action, data):
     elif action == "CLOSE":
         t = data
         emoji = "✅" if t["pnl_pct"] > 0 else "❌"
-        return f"""📊 **模擬平倉 [BN本地]** | {now}
+        ping = f"<@{DISCORD_PING_USER_ID}>" if DISCORD_PING_USER_ID else ""
+        return f"""{ping}
+📊 **模擬平倉 [BN本地]** | {now}
 
 {emoji} **{t['symbol']}** {t['direction']}
 • 進場: ${t['entry']:.4g} → 出場: ${t['exit']:.4g}
@@ -592,12 +596,54 @@ def format_trade_msg(action, data):
 📍 **持倉中** ({s['open_positions']} 筆)
 • 未實現盈虧: ${s['unrealized_pnl']:+.2f}"""
 
+def format_main_brief(action, data):
+    """主頻道精簡版通知（僅開/平倉）"""
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz).strftime("%H:%M")
+    ping = f"<@{DISCORD_PING_USER_ID}> " if DISCORD_PING_USER_ID else ""
+    if action == "OPEN":
+        pos, _ = data
+        side = "🟢" if pos["direction"] == "LONG" else "🔴"
+        return f"{ping}{side} 開倉 {pos['symbol']} {pos['direction']} @${pos['entry_price']:.4g} | TP2 ${pos['tp2']:.4g} | SL ${pos['sl']:.4g} | {now}"
+    if action == "CLOSE":
+        t = data
+        icon = "✅" if t["pnl_pct"] > 0 else "❌"
+        return f"{ping}{icon} 平倉 {t['symbol']} {t['direction']} {t['pnl_pct']:+.2f}% (${t['pnl_usd']:+.0f}) | {t['reason']} | {now}"
+    return ""
+
+
+def send_main_discord(msg, pin=False):
+    """發送主頻道精簡通知（可釘選）"""
+    if not msg:
+        return
+    success = send_discord_message(msg)
+    if pin and success:
+        try:
+            import requests
+            import json as _json
+            with open(os.path.expanduser("~/.openclaw/openclaw.json"), "r") as f:
+                cfg = _json.load(f)
+            bot_token = cfg.get("channels", {}).get("discord", {}).get("token", "")
+            if bot_token:
+                msgs = requests.get(
+                    f"https://discord.com/api/v10/channels/{DISCORD_MAIN_CHANNEL_ID}/messages?limit=1",
+                    headers={"Authorization": f"Bot {bot_token}"}, timeout=10
+                ).json()
+                if msgs and len(msgs) > 0:
+                    requests.put(
+                        f"https://discord.com/api/v10/channels/{DISCORD_MAIN_CHANNEL_ID}/pins/{msgs[0]['id']}",
+                        headers={"Authorization": f"Bot {bot_token}"}, timeout=10
+                    )
+        except:
+            pass
+
+
 def send_discord(msg, pin=False):
-    """發送 Discord 訊息（使用共用 notify 模組，保留釘選功能）"""
+    """發送 Discord 訊息（討論串詳細版）"""
     if not msg:
         return
     
-    # 使用共用模組發送訊息
+    # 使用共用模組發送訊息（模擬交易討論串）
     success = send_discord_message(msg, thread_id=DISCORD_THREAD_PAPER)
     
     # 如果需要釘選且發送成功
@@ -636,6 +682,10 @@ def process_signal(symbol, signal, price, phase, rsi, strength_score=0, strength
         msg = format_trade_msg("OPEN", (pos, reason))
         print(msg)
         send_discord(msg, pin=True)
+        # 主頻道精簡版
+        brief = format_main_brief("OPEN", (pos, reason))
+        if brief:
+            send_main_discord(brief, pin=True)
         return True, reason
     else:
         print(f"⏭️ {symbol}: {reason}")
@@ -649,6 +699,10 @@ def check_and_close():
         msg = format_trade_msg("CLOSE", t)
         print(msg)
         send_discord(msg, pin=True)
+        # 主頻道精簡版
+        brief = format_main_brief("CLOSE", t)
+        if brief:
+            send_main_discord(brief, pin=True)
     
     return closed
 
