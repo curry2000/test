@@ -181,7 +181,7 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
         if p["symbol"] == symbol:
             return None, "已有持倉"
     
-    # SL 冷卻：同幣被 SL 出場後 1 小時內不再開倉
+    # SL 冷卻：同幣被 SL 出場後 3 小時內不再開倉（SL再進場 23.3% WR）
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     for t in state.get("closed", [])[-50:]:  # 只查最近 50 筆
@@ -191,8 +191,8 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
                 try:
                     sl_time = datetime.fromisoformat(closed_at)
                     hours_since = (now - sl_time).total_seconds() / 3600
-                    if hours_since < 1:
-                        return None, f"SL冷卻中({hours_since:.1f}h/{1}h)"
+                    if hours_since < 3:
+                        return None, f"SL冷卻中({hours_since:.1f}h/{3}h)"
                 except:
                     pass
     
@@ -367,11 +367,11 @@ def check_positions(state):
                 pos["tp2_hit"] = True
                 pos["trailing_sl"] = current_price * 0.95
                 tp2_pnl = pnl_pct
-                tp2_usd = pos["size"] * 0.7 * tp2_pnl / 100
+                tp2_usd = pos["size"] * 0.5 * tp2_pnl / 100
                 state["capital"] += tp2_usd
-                pos["size"] = pos["size"] * 0.3
-                pos["remaining_pct"] = 30
-                closed.append(build_closed_record(pos, exit_price, tp2_pnl, tp2_usd, "TP2(70%平)"))
+                pos["size"] = pos["size"] * 0.5
+                pos["remaining_pct"] = 50
+                closed.append(build_closed_record(pos, exit_price, tp2_pnl, tp2_usd, "TP2(50%平)"))
                 state["closed"].append(closed[-1])
             elif current_price >= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
@@ -447,11 +447,11 @@ def check_positions(state):
                 pos["tp2_hit"] = True
                 pos["trailing_sl"] = current_price * 1.05
                 tp2_pnl = pnl_pct
-                tp2_usd = pos["size"] * 0.7 * tp2_pnl / 100
+                tp2_usd = pos["size"] * 0.5 * tp2_pnl / 100
                 state["capital"] += tp2_usd
-                pos["size"] = pos["size"] * 0.3
-                pos["remaining_pct"] = 30
-                closed.append(build_closed_record(pos, exit_price, tp2_pnl, tp2_usd, "TP2(70%平)"))
+                pos["size"] = pos["size"] * 0.5
+                pos["remaining_pct"] = 50
+                closed.append(build_closed_record(pos, exit_price, tp2_pnl, tp2_usd, "TP2(50%平)"))
                 state["closed"].append(closed[-1])
             elif current_price <= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
