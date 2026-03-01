@@ -9,7 +9,8 @@ from datetime import datetime
 # 使用共用模組
 from config import (
     PULLBACK_STATE_FILE,
-    TW_TIMEZONE
+    TW_TIMEZONE,
+    DISCORD_THREAD_TECH
 )
 from exchange_api import get_klines
 from notify import send_discord_message
@@ -48,7 +49,7 @@ def send_discord(message, pin=False):
     """發送 Discord 訊息（含釘選功能）"""
     import requests
     
-    success = send_discord_message(message)
+    success = send_discord_message(message, thread_id=DISCORD_THREAD_TECH)
     
     if success and pin:
         bot_token = get_bot_token()

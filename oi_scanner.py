@@ -3,8 +3,9 @@ import os
 import json
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from config import DISCORD_THREAD_TECH
+from notify import send_discord_message
 
-DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 STATE_FILE = os.path.expanduser("~/.openclaw/oi_state_local_v2.json")
 SIGNAL_LOG = os.path.expanduser("~/.openclaw/oi_signals_local_v2.json")
 NOTIFIED_FILE = os.path.expanduser("~/.openclaw/oi_notified_local_v2.json")
@@ -543,11 +544,11 @@ def format_message(alerts, scanned):
     return "\n".join(lines)
 
 def send_discord(message):
-    if not DISCORD_WEBHOOK or not message:
+    if not message:
         return
     try:
-        r = requests.post(DISCORD_WEBHOOK, json={"content": message}, timeout=10)
-        print(f"Discord: {r.status_code}")
+        ok = send_discord_message(message, thread_id=DISCORD_THREAD_TECH)
+        print(f"Discord: {'ok' if ok else 'failed'}")
     except Exception as e:
         print(f"Error: {e}")
 

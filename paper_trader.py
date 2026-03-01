@@ -6,7 +6,8 @@ from datetime import datetime, timezone, timedelta
 from config import (
     PAPER_STATE_FILE, PAPER_CONFIG, DYNAMIC_TP_CONFIG, VOL_RATIO_MULTIPLIERS,
     FUNDING_RATE_THRESHOLD_LONG, FUNDING_RATE_THRESHOLD_SHORT,
-    RSI_EXTREME_HIGH, RSI_HIGH, RSI_EXTREME_LOW, RSI_LOW
+    RSI_EXTREME_HIGH, RSI_HIGH, RSI_EXTREME_LOW, RSI_LOW,
+    DISCORD_THREAD_PAPER
 )
 from exchange_api import get_price, get_funding_rate, get_klines
 from notify import send_discord_message, send_trade_update
@@ -597,7 +598,7 @@ def send_discord(msg, pin=False):
         return
     
     # 使用共用模組發送訊息
-    success = send_discord_message(msg)
+    success = send_discord_message(msg, thread_id=DISCORD_THREAD_PAPER)
     
     # 如果需要釘選且發送成功
     if pin and success:

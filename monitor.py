@@ -11,7 +11,8 @@ import numpy as np
 from config import (
     MONITOR_SIGNALS_FILE,
     OB_STATE_FILE,
-    TW_TIMEZONE
+    TW_TIMEZONE,
+    DISCORD_THREAD_TECH
 )
 from exchange_api import get_klines
 from notify import send_discord_message
@@ -577,7 +578,7 @@ def format_message(analyses):
 
 def send_discord(message):
     """發送 Discord 訊息（使用共用 notify 模組）"""
-    success = send_discord_message(message)
+    success = send_discord_message(message, thread_id=DISCORD_THREAD_TECH)
     if success:
         print("Discord: 200 OK")
     else:

@@ -10,7 +10,8 @@ from datetime import datetime
 # 使用共用模組
 from config import (
     DUMP_WARNING_STATE_FILE,
-    TW_TIMEZONE
+    TW_TIMEZONE,
+    DISCORD_THREAD_TECH
 )
 from exchange_api import get_klines, get_all_tickers
 from notify import send_discord_message
@@ -329,7 +330,7 @@ def main():
         lines.append("\n💡 預警≠做空信號，建議：有多單先收利潤/移止損")
         msg = "\n".join(lines)
         print(f"\n{msg}")
-        send_discord_message(msg)
+        send_discord_message(msg, thread_id=DISCORD_THREAD_TECH)
 
     # 發送強勢回調候選（大盤上漲時）
     if momentum_alerts:
@@ -346,7 +347,7 @@ def main():
         lines.append(f"\n⚡ 大盤偏多(RSI {btc_rsi:.0f})，這些幣的「弱勢信號」可能是回調買點")
         msg = "\n".join(lines)
         print(f"\n{msg}")
-        send_discord_message(msg)
+        send_discord_message(msg, thread_id=DISCORD_THREAD_TECH)
 
     if not dump_alerts and not momentum_alerts:
         print("No alerts")

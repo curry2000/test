@@ -10,6 +10,11 @@ import os
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 DISCORD_5MIN_THREAD_ID = os.environ.get("DISCORD_5MIN_THREAD_ID", "")
 
+# Discord 討論串路由（主頻道只放摘要）
+DISCORD_THREAD_PAPER = os.environ.get("DISCORD_THREAD_PAPER", "1477446266039439573")      # 模擬交易
+DISCORD_THREAD_TECH = os.environ.get("DISCORD_THREAD_TECH", "1477446784778375419")        # 技術分析
+DISCORD_THREAD_ADVISOR = os.environ.get("DISCORD_THREAD_ADVISOR", "1477446804625686712")  # 倉位建議
+
 # ============================================================
 # 資料儲存路徑
 # ============================================================

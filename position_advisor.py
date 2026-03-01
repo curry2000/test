@@ -10,10 +10,11 @@ from datetime import datetime
 from config import (
     POSITIONS,
     POSITION_ALERT_LEVELS,
-    TW_TIMEZONE
+    TW_TIMEZONE,
+    DISCORD_THREAD_ADVISOR
 )
 from exchange_api import get_price, get_klines
-from notify import send_discord_message, DISCORD_WEBHOOK_URL
+from notify import send_discord_message
 from ob_engine import find_order_blocks_v2, filter_and_rank_obs, score_ob
 
 
@@ -330,7 +331,7 @@ def main():
         if _high_vol:
             message = "🚨 波動警報\n\n" + message
         print("\n" + message)
-        send_discord_message(message, webhook_url=DISCORD_WEBHOOK_URL)
+        send_discord_message(message, thread_id=DISCORD_THREAD_ADVISOR)
     elif results:
         print(f"[靜默] 距上次 {_elapsed:.0f}s/{ADVISOR_INTERVAL}s, 無大波動")
 
