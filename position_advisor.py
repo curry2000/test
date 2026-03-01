@@ -78,20 +78,33 @@ def get_action_advice(pos, price, levels):
     margin_coin = pos.get("margin_coin", 0)
     margin_unit = pos.get("margin_unit", "USDT")
     
+    real_leverage = leverage
+    margin_value = margin
+    margin_label = margin_unit
+
     if margin_coin > 0:
         # 幣本位：保證金是幣，PnL 也是幣
         unrealized_coin = quantity * (price - entry) / price if pos["direction"] == "LONG" else quantity * (entry - price) / price
         pnl_vs_margin = abs(unrealized_coin) / margin_coin
         margin_usd = margin_coin * price
         unrealized_pnl = unrealized_coin * price
+        real_leverage = (quantity * price) / margin_usd if margin_usd > 0 else leverage
+        margin_value = margin_coin
+        margin_label = pos.get("margin_unit", "COIN")
     elif quantity > 0 and margin > 0:
         # U本位：用真實持倉量和保證金計算
         unrealized_pnl = quantity * (price - entry) if pos["direction"] == "LONG" else quantity * (entry - price)
         pnl_vs_margin = abs(unrealized_pnl) / margin
+        real_leverage = (quantity * price) / margin if margin > 0 else leverage
+        margin_value = margin
+        margin_label = "USDT"
     elif margin > 0:
         position_value = margin * leverage
         unrealized_pnl = position_value * pnl_pct / 100
         pnl_vs_margin = abs(unrealized_pnl) / margin
+        real_leverage = leverage
+        margin_value = margin
+        margin_label = "USDT"
     else:
         pnl_vs_margin = abs(pnl_pct) * leverage / 100  # fallback
     
@@ -201,6 +214,7 @@ def get_action_advice(pos, price, levels):
     
     return {
         "name": pos["name"],
+        "direction": pos.get("direction", "LONG"),
         "price": price,
         "entry": entry,
         "pnl_pct": pnl_pct,
@@ -209,6 +223,11 @@ def get_action_advice(pos, price, levels):
         "risk": risk,
         "rsi_1h": rsi_1h,
         "rsi_4h": rsi_4h,
+        "leverage": leverage,
+        "real_leverage": real_leverage,
+        "quantity": quantity,
+        "margin_value": margin_value,
+        "margin_label": margin_label,
         "advice": advice,
         "levels": levels
     }
@@ -223,8 +242,9 @@ def format_message(results):
     for r in results:
         pnl_emoji = "🟢" if r["pnl_pct"] >= 0 else "🔴"
         
-        lines.append(f"**{r['name']}** {pnl_emoji}{r['pnl_pct']:+.1f}% | {r['risk']}")
-        lines.append(f"現價 ${r['price']:,.2f} | 均價 ${r['entry']:,.2f} | 清算 ${r['liq']:,.0f} ({r['liq_dist']:.0f}%)")
+        lines.append(f"**{r['name']} {r['direction']}** {pnl_emoji}{r['pnl_pct']:+.1f}% | {r['risk']}")
+        lines.append(f"保證金 {r['margin_value']:.4f} {r['margin_label']} | 倉位 {r['quantity']:.4f} | 槓桿 {r['leverage']}x (真實 {r['real_leverage']:.1f}x)")
+        lines.append(f"均價 ${r['entry']:,.2f} | 現價 ${r['price']:,.2f} | 清算 ${r['liq']:,.0f} ({r['liq_dist']:.0f}%)")
         lines.append(f"RSI → 1H: {r['rsi_1h']:.0f} | 4H: {r['rsi_4h']:.0f}")
         
         # 顯示各週期的 OB

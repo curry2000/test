@@ -60,14 +60,58 @@ def get_6h_price_move(symbol):
         pass
     return None
 
+def get_grafana_data(symbol):
+    """從 Grafana OI Dashboard 抓取即時數據"""
+    try:
+        from config import GRAFANA_OI_URL
+        import requests
+        r = requests.get(GRAFANA_OI_URL, timeout=10)
+        if r.status_code == 200:
+            for coin in r.json().get("data", []):
+                if coin.get("symbol") == symbol:
+                    return {
+                        "fr": coin.get("FR"),
+                        "lsur": coin.get("LSUR"),
+                        "ps_bias": coin.get("PS_Bias"),
+                        "idi_1h": coin.get("iDI_1h"),
+                        "adi_1h": coin.get("aDI_1h"),
+                        "oi_usd": coin.get("OI$M"),
+                        "oi_1h": coin.get("OI_1h"),
+                        "oi_4h": coin.get("OI_4h"),
+                        "ls_1h": coin.get("LS_1h"),
+                        "ls_4h": coin.get("LS_4h"),
+                    }
+    except:
+        pass
+    return {}
+
+def get_btc_context():
+    """抓 BTC 當前價格和 RSI 作為大盤環境指標"""
+    try:
+        btc_price = get_price("BTC")
+        klines = get_klines("BTC", "1h", 15)
+        if klines and len(klines) >= 14:
+            closes = [k["close"] for k in klines]
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                d = closes[i] - closes[i-1]
+                gains.append(max(d, 0))
+                losses.append(max(-d, 0))
+            avg_g = sum(gains[-14:]) / 14
+            avg_l = sum(losses[-14:]) / 14
+            btc_rsi = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 100
+            return {"btc_price": btc_price, "btc_rsi": round(btc_rsi, 1)}
+    except:
+        pass
+    return {"btc_price": get_price("BTC"), "btc_rsi": None}
+
 def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0, symbol=""):
-    # 資金費率過濾（逆向策略）
+    # 資金費率過濾（順勢策略 — 回測證實趨勢>反轉）
     fr = get_funding_rate(symbol) if symbol else 0
     fr_pct = fr * 100  # 轉成百分比
     
     if signal == "LONG":
-        if fr > 0.0001:  # 費率 > +0.01% 不做多
-            return False, f"資金費率 {fr_pct:+.4f}% 偏正，不做多"
+        # LONG 不限制 FR — 正費率=多頭趨勢強（86.4% WR）
         if rsi >= 80 and "⚠️" in phase:
             return False, f"RSI {rsi:.0f} 極端超買+高位，跳過"
         # C級 + 爆量 = 追高垃圾，不開倉
@@ -80,13 +124,54 @@ def should_open_position(signal, phase, rsi, strength_grade="", vol_ratio=0, sym
         return True, f"符合條件 FR:{fr_pct:+.4f}%"
     
     elif signal == "SHORT":
-        if fr < -0.0005:  # 費率 < -0.05% 不做空
-            return False, f"資金費率 {fr_pct:+.4f}% 偏負，不做空"
+        if fr > 0:  # 正費率不做空（勝率僅 21.9%）
+            return False, f"資金費率 {fr_pct:+.4f}% 正費率，不做空"
         if rsi <= 40:
             return True, f"RSI {rsi:.0f} 做空 FR:{fr_pct:+.4f}%"
         return False, f"RSI {rsi:.0f} > 40，不做空"
     
     return True, "符合條件"
+
+def build_closed_record(pos, exit_price, pnl_pct, pnl_usd, reason):
+    """統一建立平倉紀錄，包含開倉/平倉完整數據"""
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    
+    # 平倉時的市場快照
+    exit_grafana = get_grafana_data(pos["symbol"])
+    exit_btc = get_btc_context()
+    
+    record = {
+        "symbol": pos["symbol"],
+        "direction": pos["direction"],
+        "entry": pos["entry_price"],
+        "exit": exit_price,
+        "pnl_pct": pnl_pct,
+        "pnl_usd": pnl_usd,
+        "reason": reason,
+        "phase": pos.get("phase", ""),
+        "closed_at": now.isoformat(),
+        "opened_at": pos.get("entry_time", ""),
+        "strength_grade": pos.get("strength_grade", ""),
+        "strength_score": pos.get("strength_score", 0),
+        "rsi": pos.get("rsi", 0),
+        "vol_ratio": pos.get("vol_ratio", 0),
+        # 開倉快照
+        "entry_fr": pos.get("entry_fr"),
+        "entry_lsur": pos.get("entry_lsur"),
+        "entry_ps_bias": pos.get("entry_ps_bias"),
+        "entry_idi_1h": pos.get("entry_idi_1h"),
+        "entry_btc_price": pos.get("entry_btc_price"),
+        "entry_btc_rsi": pos.get("entry_btc_rsi"),
+        # 平倉快照
+        "exit_fr": exit_grafana.get("fr"),
+        "exit_lsur": exit_grafana.get("lsur"),
+        "exit_ps_bias": exit_grafana.get("ps_bias"),
+        "exit_idi_1h": exit_grafana.get("idi_1h"),
+        "exit_btc_price": exit_btc.get("btc_price"),
+        "exit_btc_rsi": exit_btc.get("btc_rsi"),
+    }
+    return record
 
 def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade="", vol_ratio=0):
     if len(state["positions"]) >= CONFIG["max_positions"]:
@@ -128,6 +213,12 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
     
     position_size = state["capital"] * CONFIG["position_pct"] / 100 * CONFIG["leverage"]
     
+    # C. S級動態倉位：vol>=10x 半倉（21% WR, 假突破高風險）
+    size_note = ""
+    if "S" in strength_grade and vol_ratio >= 10:
+        position_size *= 0.5
+        size_note = " [半倉:S級爆量]"
+    
     tp1_pct, tp2_pct, sl_pct = get_dynamic_tp(strength_grade, vol_ratio)
     
     if signal == "LONG":
@@ -142,6 +233,10 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
     tw_tz = timezone(timedelta(hours=8))
     now = datetime.now(tw_tz)
     
+    # 記錄開倉時的完整市場數據（供回測用）
+    grafana = get_grafana_data(symbol)
+    btc_ctx = get_btc_context()
+    
     position = {
         "symbol": symbol,
         "direction": signal,
@@ -153,7 +248,20 @@ def open_position(state, symbol, signal, entry_price, phase, rsi, strength_grade
         "tp1_hit": False,
         "entry_time": now.isoformat(),
         "phase": phase,
-        "rsi": rsi
+        "rsi": rsi,
+        "strength_grade": strength_grade,
+        "strength_score": 0,
+        "vol_ratio": vol_ratio,
+        "size_note": size_note,
+        # 開倉快照
+        "entry_fr": grafana.get("fr"),
+        "entry_lsur": grafana.get("lsur"),
+        "entry_ps_bias": grafana.get("ps_bias"),
+        "entry_idi_1h": grafana.get("idi_1h"),
+        "entry_adi_1h": grafana.get("adi_1h"),
+        "entry_oi_usd": grafana.get("oi_usd"),
+        "entry_btc_price": btc_ctx.get("btc_price"),
+        "entry_btc_rsi": btc_ctx.get("btc_rsi"),
     }
     
     state["positions"].append(position)
@@ -196,17 +304,39 @@ def check_positions(state):
                 state["capital"] += cp_usd
                 pos["size"] = pos["size"] * 0.5
                 pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
-                closed.append({
-                    "symbol": symbol, "direction": pos["direction"],
-                    "entry": pos["entry_price"], "exit": exit_price,
-                    "pnl_pct": pnl_pct, "pnl_usd": cp_usd,
-                    "reason": "30min檢查(半倉)", "phase": pos["phase"],
-                    "closed_at": now.isoformat(),
-                    "strength_grade": pos.get("strength_grade", ""),
-                    "strength_score": pos.get("strength_score", 0),
-                    "rsi": pos.get("rsi", 0),
-                    "vol_ratio": pos.get("vol_ratio", 0)
-                })
+                closed.append(build_closed_record(pos, exit_price, pnl_pct, cp_usd, "30min檢查(半倉)"))
+                state["closed"].append(closed[-1])
+                remaining.append(pos)
+                continue
+            
+            # A. 3h 中途檢查：虧>3%全砍，盈>2%全平
+            if not pos.get("checkpoint_3h") and 3.0 <= hours_held <= 4.0 and not tp2_hit:
+                pos["checkpoint_3h"] = True
+                if pnl_pct < -3:
+                    exit_reason = "3h檢查(止損)"
+                elif pnl_pct >= 2:
+                    exit_reason = "3h檢查(鎖利)"
+            
+            # B. 中間鎖利層：浮盈到5%時鎖40%利潤（防止TRAIL_FULL回吐）
+            if not pos.get("lock_5pct") and not tp2_hit and pnl_pct >= 5:
+                pos["lock_5pct"] = True
+                lock_usd = pos["size"] * 0.4 * pnl_pct / 100
+                state["capital"] += lock_usd
+                pos["size"] = pos["size"] * 0.6
+                pos["remaining_pct"] = int(pos.get("remaining_pct", 100) * 0.6)
+                closed.append(build_closed_record(pos, exit_price, pnl_pct, lock_usd, "鎖利(40%@5%)"))
+                state["closed"].append(closed[-1])
+                remaining.append(pos)
+                continue
+            
+            # B. BREAKEVEN 鎖利層：浮盈到3%時鎖20%（防止全部回吐）
+            if not pos.get("lock_3pct") and not tp2_hit and not pos.get("lock_5pct") and pnl_pct >= 3:
+                pos["lock_3pct"] = True
+                lock_usd = pos["size"] * 0.2 * pnl_pct / 100
+                state["capital"] += lock_usd
+                pos["size"] = pos["size"] * 0.8
+                pos["remaining_pct"] = int(pos.get("remaining_pct", 100) * 0.8)
+                closed.append(build_closed_record(pos, exit_price, pnl_pct, lock_usd, "鎖利(20%@3%)"))
                 state["closed"].append(closed[-1])
                 remaining.append(pos)
                 continue
@@ -229,17 +359,7 @@ def check_positions(state):
                     pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
                     # 第二批的 SL 設在 -10%
                     pos["sl"] = pos["entry_price"] * 0.9
-                    closed.append({
-                        "symbol": symbol, "direction": pos["direction"],
-                        "entry": pos["entry_price"], "exit": exit_price,
-                        "pnl_pct": sl_pnl, "pnl_usd": sl_usd,
-                        "reason": "SL(半倉)", "phase": pos["phase"],
-                        "closed_at": now.isoformat(),
-                        "strength_grade": pos.get("strength_grade", ""),
-                        "strength_score": pos.get("strength_score", 0),
-                        "rsi": pos.get("rsi", 0),
-                        "vol_ratio": pos.get("vol_ratio", 0)
-                    })
+                    closed.append(build_closed_record(pos, exit_price, sl_pnl, sl_usd, "SL(半倉)"))
                     state["closed"].append(closed[-1])
                 else:
                     exit_reason = "SL(清倉)"
@@ -251,17 +371,7 @@ def check_positions(state):
                 state["capital"] += tp2_usd
                 pos["size"] = pos["size"] * 0.3
                 pos["remaining_pct"] = 30
-                closed.append({
-                    "symbol": symbol, "direction": pos["direction"],
-                    "entry": pos["entry_price"], "exit": exit_price,
-                    "pnl_pct": tp2_pnl, "pnl_usd": tp2_usd,
-                    "reason": "TP2(70%平)", "phase": pos["phase"],
-                    "closed_at": now.isoformat(),
-                    "strength_grade": pos.get("strength_grade", ""),
-                    "strength_score": pos.get("strength_score", 0),
-                    "rsi": pos.get("rsi", 0),
-                    "vol_ratio": pos.get("vol_ratio", 0)
-                })
+                closed.append(build_closed_record(pos, exit_price, tp2_pnl, tp2_usd, "TP2(70%平)"))
                 state["closed"].append(closed[-1])
             elif current_price >= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
@@ -276,17 +386,39 @@ def check_positions(state):
                 state["capital"] += cp_usd
                 pos["size"] = pos["size"] * 0.5
                 pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
-                closed.append({
-                    "symbol": symbol, "direction": pos["direction"],
-                    "entry": pos["entry_price"], "exit": exit_price,
-                    "pnl_pct": pnl_pct, "pnl_usd": cp_usd,
-                    "reason": "30min檢查(半倉)", "phase": pos["phase"],
-                    "closed_at": now.isoformat(),
-                    "strength_grade": pos.get("strength_grade", ""),
-                    "strength_score": pos.get("strength_score", 0),
-                    "rsi": pos.get("rsi", 0),
-                    "vol_ratio": pos.get("vol_ratio", 0)
-                })
+                closed.append(build_closed_record(pos, exit_price, pnl_pct, cp_usd, "30min檢查(半倉)"))
+                state["closed"].append(closed[-1])
+                remaining.append(pos)
+                continue
+            
+            # A. 3h 中途檢查（SHORT）
+            if not pos.get("checkpoint_3h") and 3.0 <= hours_held <= 4.0 and not tp2_hit:
+                pos["checkpoint_3h"] = True
+                if pnl_pct < -3:
+                    exit_reason = "3h檢查(止損)"
+                elif pnl_pct >= 2:
+                    exit_reason = "3h檢查(鎖利)"
+            
+            # B. 中間鎖利層（SHORT）
+            if not pos.get("lock_5pct") and not tp2_hit and pnl_pct >= 5:
+                pos["lock_5pct"] = True
+                lock_usd = pos["size"] * 0.4 * pnl_pct / 100
+                state["capital"] += lock_usd
+                pos["size"] = pos["size"] * 0.6
+                pos["remaining_pct"] = int(pos.get("remaining_pct", 100) * 0.6)
+                closed.append(build_closed_record(pos, exit_price, pnl_pct, lock_usd, "鎖利(40%@5%)"))
+                state["closed"].append(closed[-1])
+                remaining.append(pos)
+                continue
+            
+            # B. BREAKEVEN 鎖利層（SHORT）
+            if not pos.get("lock_3pct") and not tp2_hit and not pos.get("lock_5pct") and pnl_pct >= 3:
+                pos["lock_3pct"] = True
+                lock_usd = pos["size"] * 0.2 * pnl_pct / 100
+                state["capital"] += lock_usd
+                pos["size"] = pos["size"] * 0.8
+                pos["remaining_pct"] = int(pos.get("remaining_pct", 100) * 0.8)
+                closed.append(build_closed_record(pos, exit_price, pnl_pct, lock_usd, "鎖利(20%@3%)"))
                 state["closed"].append(closed[-1])
                 remaining.append(pos)
                 continue
@@ -307,17 +439,7 @@ def check_positions(state):
                     pos["sl_half_hit"] = True
                     pos["remaining_pct"] = pos.get("remaining_pct", 100) // 2
                     pos["sl"] = pos["entry_price"] * 1.1
-                    closed.append({
-                        "symbol": symbol, "direction": pos["direction"],
-                        "entry": pos["entry_price"], "exit": exit_price,
-                        "pnl_pct": sl_pnl, "pnl_usd": sl_usd,
-                        "reason": "SL(半倉)", "phase": pos["phase"],
-                        "closed_at": now.isoformat(),
-                        "strength_grade": pos.get("strength_grade", ""),
-                        "strength_score": pos.get("strength_score", 0),
-                        "rsi": pos.get("rsi", 0),
-                        "vol_ratio": pos.get("vol_ratio", 0)
-                    })
+                    closed.append(build_closed_record(pos, exit_price, sl_pnl, sl_usd, "SL(半倉)"))
                     state["closed"].append(closed[-1])
                 else:
                     exit_reason = "SL(清倉)"
@@ -329,17 +451,7 @@ def check_positions(state):
                 state["capital"] += tp2_usd
                 pos["size"] = pos["size"] * 0.3
                 pos["remaining_pct"] = 30
-                closed.append({
-                    "symbol": symbol, "direction": pos["direction"],
-                    "entry": pos["entry_price"], "exit": exit_price,
-                    "pnl_pct": tp2_pnl, "pnl_usd": tp2_usd,
-                    "reason": "TP2(70%平)", "phase": pos["phase"],
-                    "closed_at": now.isoformat(),
-                    "strength_grade": pos.get("strength_grade", ""),
-                    "strength_score": pos.get("strength_score", 0),
-                    "rsi": pos.get("rsi", 0),
-                    "vol_ratio": pos.get("vol_ratio", 0)
-                })
+                closed.append(build_closed_record(pos, exit_price, tp2_pnl, tp2_usd, "TP2(70%平)"))
                 state["closed"].append(closed[-1])
             elif current_price <= pos["tp1"] and not pos.get("tp1_hit"):
                 pos["tp1_hit"] = True
@@ -378,21 +490,7 @@ def check_positions(state):
             state["capital"] += pnl_usd
             
             trail_tag = f"(尾倉{remaining_pct}%)" if tp2_hit else ""
-            closed.append({
-                "symbol": symbol,
-                "direction": pos["direction"],
-                "entry": pos["entry_price"],
-                "exit": exit_price,
-                "pnl_pct": pnl_pct,
-                "pnl_usd": pnl_usd,
-                "reason": f"{exit_reason}{trail_tag}",
-                "phase": pos["phase"],
-                "closed_at": now.isoformat(),
-                "strength_grade": pos.get("strength_grade", ""),
-                "strength_score": pos.get("strength_score", 0),
-                "rsi": pos.get("rsi", 0),
-                "vol_ratio": pos.get("vol_ratio", 0)
-            })
+            closed.append(build_closed_record(pos, exit_price, pnl_pct, pnl_usd, f"{exit_reason}{trail_tag}"))
             
             state["closed"].append(closed[-1])
         else:
@@ -446,13 +544,18 @@ def format_trade_msg(action, data):
     if action == "OPEN":
         pos, reason = data
         emoji = "🟢" if pos["direction"] == "LONG" else "🔴"
+        grade = pos.get('strength_grade', '')
+        vol = pos.get('vol_ratio', 0)
+        size_note = pos.get('size_note', '')
         return f"""📝 **模擬開倉 [BN本地]** | {now}
 
-{emoji} **{pos['symbol']}** {pos['direction']}
-• 進場: ${pos['entry_price']:.4g}
-• 倉位: ${pos['size']:.0f}
-• SL: ${pos['sl']:.4g} | TP1: ${pos['tp1']:.4g}
-• 階段: {pos['phase']} | RSI: {pos['rsi']:.0f}
+{emoji} **{pos['symbol']}** {pos['direction']} {grade}{size_note}
+• 進場: ${pos['entry_price']:.4g} | 倉位: ${pos['size']:.0f}
+• TP1: ${pos['tp1']:.4g} ({abs((pos['tp1']/pos['entry_price']-1)*100):.1f}%)
+• TP2: ${pos['tp2']:.4g} ({abs((pos['tp2']/pos['entry_price']-1)*100):.1f}%)
+• SL: ${pos['sl']:.4g} ({abs((pos['sl']/pos['entry_price']-1)*100):.1f}%)
+• 鎖利: 3%→20% | 5%→40%
+• 階段: {pos['phase']} | RSI: {pos['rsi']:.0f} | Vol: {vol:.1f}x
 • 理由: {reason}"""
     
     elif action == "CLOSE":

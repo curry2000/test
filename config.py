@@ -111,8 +111,12 @@ VOL_RATIO_MULTIPLIERS = {
 }
 
 # 資金費率過濾
-FUNDING_RATE_THRESHOLD_LONG = 0.0001   # > 0.01% 不做多
-FUNDING_RATE_THRESHOLD_SHORT = -0.0001 # < -0.01% 不做空
+FUNDING_RATE_THRESHOLD_LONG = None      # LONG 不限制 FR（正費率=趨勢強，勝率更高）
+FUNDING_RATE_THRESHOLD_SHORT = 0.0     # SHORT 擋正費率（FR>0% 做空勝率僅 21.9%）
+
+# Grafana OI Dashboard API
+GRAFANA_OI_URL = "http://gf.wavelet.pro:3000/api/datasources/proxy/uid/faad6586-bcc7-4462-b66c-4d3fb4d2610c/oi"
+GRAFANA_SNAPSHOT_DIR = os.path.join(os.path.expanduser("~"), ".openclaw", "grafana_snapshots")
 
 # RSI 過濾
 RSI_EXTREME_HIGH = 80          # RSI >= 80 極端超買
